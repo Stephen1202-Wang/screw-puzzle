@@ -1,5 +1,5 @@
 /* 离线缓存：首次打开后断网也能玩。改版时把 CACHE 版本号 +1 */
-const CACHE = 'screw-puzzle-v4';
+const CACHE = 'screw-puzzle-v5';
 const ASSETS = ['./','./index.html','./manifest.webmanifest',
                 './icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 self.addEventListener('install', e => {

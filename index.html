@@ -144,7 +144,8 @@ function levelParams(n){
   const target = clamp(Math.round(9+n*1.15)+wave*3,12,45);  // 目标螺丝总数（>=12 才凑得出 4 组 4 色）
   // 难度闸门：允许 bot 通关率的上限（0 = 笨策略必须全败）
   const botMax = n<=3?1 : n<=6?0.5 : n<=12?0.2 : 0;
-  return {plates,colors,slots,maxScrew,target,botMax,wave};
+  const delayMax = n<=12?1 : 2;                       // 最多推迟几个早期盒子
+  return {plates,colors,slots,maxScrew,target,botMax,delayMax,wave};
 }
 
 /* ===================== 关卡生成 ===================== */
@@ -441,6 +442,113 @@ function rewindToSolvable(){
   G.history.length=0; restore(G.initial); G.status='play'; hidePanel();
   toast('已回到开局（这一关一定有解）'); return true;
 }
+/* 盒子队列的候选生成：三种策略混着产，让闸门按"关内难度弧线"打分挑最好的。
+   关键认知：把混乱堆在队尾不是"难"而是"无解"——收尾阶段几乎没有余量。
+   真正制造"前松后紧"的是把早期盒子推迟：那批螺丝被迫长期占着孔位，压力累积到收尾。 */
+function qFullShuffle(q){ return shuffle(q.slice()); }
+function qMidShuffle(q){                      // 队首队尾保持构造序，只打散中段
+  const n=q.length, a=q.slice();
+  for(let i=1;i<n-1;i++){
+    const w=Math.round(n*0.5*Math.sin(Math.PI*i/(n-1)));
+    if(w<1) continue;
+    const j=clamp(i+1+Math.floor(Math.random()*w),0,n-1);
+    const t=a[i]; a[i]=a[j]; a[j]=t;
+  }
+  return a;
+}
+function qDelay(q,nDelay){                    // 把 1-2 个早期盒子推迟到尾段（孔位压力累积）
+  const n=q.length; if(n<5) return q.slice();
+  const a=q.slice(), picks=[];
+  const hi=Math.max(2,Math.floor(n*0.55));
+  for(let d=0;d<nDelay;d++){
+    const i=1+Math.floor(Math.random()*(hi-1));   // 不动第 0 个，保证开局顺畅
+    if(picks.indexOf(i)<0) picks.push(i);
+  }
+  picks.sort((x,y)=>y-x);
+  const moved=[];
+  for(const i of picks) moved.push(a.splice(i,1)[0]);
+  for(const c of moved){
+    const lo=Math.floor(a.length*0.65);
+    const pos=lo+Math.floor(Math.random()*Math.max(1,a.length-lo+1));
+    a.splice(Math.min(pos,a.length),0,c);
+  }
+  // 尾段之外再轻微打散中段，避免"只有一个盒子被挪"太容易识破
+  for(let i=1;i<a.length-1;i++){
+    if(Math.random()<0.25){ const j=Math.min(a.length-1,i+1+Math.floor(Math.random()*2));
+      const t=a[i]; a[i]=a[j]; a[j]=t; }
+  }
+  return a;
+}
+function makeQueue(base,P,k){
+  const m=k%3;
+  if(m===0) return qFullShuffle(base);
+  if(m===1) return qMidShuffle(base);
+  return qDelay(base,1+Math.floor(Math.random()*P.delayMax));
+}
+// 关内难度剖面：通关线前/后段的孔位占用峰值 + 贪心 bot 能活到第几步
+function simProfile(L,line){
+  const st=simInit(L), n=line.length; let early=0, late=0;
+  for(let k=0;k<n;k++){
+    simTake(L,st,line[k]);
+    let used=0; for(const c of st.temp) if(c>=0) used++;
+    if(k<n/3) early=Math.max(early,used);
+    else if(k>=2*n/3) late=Math.max(late,used);
+  }
+  const st2=simInit(L); let steps=0;
+  while(steps<700){
+    const acc=[]; for(let i=0;i<L.nS;i++) if(st2.ss[i]===0&&st2.blk[i]===0) acc.push(i);
+    if(!acc.length) break;
+    const i=POL_GREEDY(L,st2,acc); if(i==null) break;
+    if(!simTake(L,st2,i)) break;
+    steps++;
+  }
+  return {early,late,gDeath:Math.min(1,steps/Math.max(1,n))};
+}
+/* 关内难度弧线的判据（确定性、便宜）：
+   照直觉玩（贪心：见到能进盒子的就拿）走完前 f 比例后，这一关是否仍然有解。
+   返回最大的可行 f —— 它就是"难度从第几成开始"。
+   配合"笨策略最终必败"(botMax=0)，即得到"前面随手玩没事，后面必须动脑"。 */
+function instinctSafeFrac(L,line){
+  const n=line.length;
+  for(const f of [0.7,0.55,0.4,0.25]){
+    const st=simInit(L);
+    const steps=Math.floor(n*f);
+    let ok=true;
+    for(let k=0;k<steps;k++){
+      const acc=[]; for(let i=0;i<L.nS;i++) if(st.ss[i]===0&&st.blk[i]===0) acc.push(i);
+      if(!acc.length) break;
+      const i=POL_GREEDY(L,st,acc);
+      if(i==null||!simTake(L,st,i)){ ok=false; break; }
+    }
+    if(!ok) continue;
+    let solv=false;
+    for(let r=0;r<45&&!solv;r++) solv=simPlayFrom(L,st,POL_SEARCH);
+    if(solv) return f;
+  }
+  return 0;
+}
+/* 抽样测容错度（仅用于验证，不进闸门：噪声大且贵） */
+function safeRatioAt(L,line,idx,maxMoves,restarts){
+  const st=simInit(L);
+  for(let k=0;k<idx;k++) if(!simTake(L,st,line[k])) return null;
+  let free=0; for(const c of st.temp) if(c<0) free++;
+  const cand=[];
+  for(let i=0;i<L.nS;i++){
+    if(st.ss[i]!==0||st.blk[i]!==0) continue;
+    if(simMatch(st,L.color[i])<0&&free===0) continue;
+    cand.push(i);
+  }
+  if(!cand.length) return null;
+  const take=shuffle(cand).slice(0,maxMoves);
+  let safe=0;
+  for(const i of take){
+    const t=simClone(st);
+    if(!simTake(L,t,i)) continue;
+    let ok=false; for(let r=0;r<restarts&&!ok;r++) ok=simPlayFrom(L,t,POL_SEARCH);
+    if(ok) safe++;
+  }
+  return safe/take.length;
+}
 function simMinSlots(L,restarts){         // 最少要几个临时孔位才有解 —— 关卡"紧张度"
   for(let sl=1;sl<=L.slots;sl++) if(simWitness({...L,slots:sl},restarts)) return sl;
   return L.slots; }
@@ -456,19 +564,30 @@ function newLevel(n){
     if(!fallback) fallback={lv:cand,q:cand.queue.slice(),mn:1,bw:1,line:cand.seq};
     if(P.botMax>=1) break;                       // 前几关就用构造序，保持简单
     const L0=simBuild(cand.plates,cand.screws,cand.queue,P.slots,cand.gen.R);
+    const shortlist=[];
     for(let k=0;k<200;k++){
-      if(performance.now()-t0>BUDGET) break;
-      const q=shuffle(cand.queue.slice());       // 把盒子队列打散 —— 难度主来源
+      if(performance.now()-t0>BUDGET*0.62) break;
+      const q=makeQueue(cand.queue,P,k);         // 三种策略轮着产候选
       const L={...L0,queue:q};
       const bw=simBotWin(L,3);                   // 便宜：笨策略先筛
       if(bw>P.botMax) continue;
       const line=simWitnessLine(L,260);          // 贵：必须找到一条通关线，否则丢弃
       if(!line) continue;
-      const mn=simMinSlots(L,45);
-      const score=mn*100-bw*60;
-      if(!best||score>best.score) best={lv:cand,q,score,mn,bw,line};
-      if(mn>=P.slots&&bw===0) break;             // 已经顶满，不用再找
+      const pr=simProfile(L,line);
+      const mn=simMinSlots(L,40);
+      const pre=(pr.late-pr.early)*8+pr.gDeath*30+mn*6-bw*30;
+      shortlist.push({lv:cand,q,L,line,pr,mn,bw,pre});
+      if(shortlist.length>=14) break;
     }
+    // 第二段：对入围候选实测"前段容错 - 后段容错"，挑弧线最陡的
+    shortlist.sort((a,b)=>b.pre-a.pre);
+    for(const c of shortlist.slice(0,8)){
+      if(performance.now()-t0>BUDGET) break;
+      c.isf=instinctSafeFrac(c.L,c.line);       // 难度从第几成开始
+      c.score=c.isf*200+c.mn*10+c.pre*0.3;
+      if(!best||c.score>best.score) best=c;
+    }
+    if(!best&&shortlist.length) best=shortlist[0];   // 兜底：至少用便宜分最高的
     if(best||performance.now()-t0>BUDGET) break;
   }
   const pick=best||fallback;
@@ -478,7 +597,7 @@ function newLevel(n){
   G.anims=[]; G.timers=[]; G.history=[]; G.sparks=[]; G.status='play'; G.moves=0;
   G.addSlotLeft=2; G.total=G.screws.length;
   G.solution=pick.line;                        // 已验证的通关线（保证这一关能通）
-  G.diff={bw:pick.bw,mn:pick.mn,slots:P.slots,fb:!best,gen:Math.round(performance.now()-t0)};
+  G.diff={bw:pick.bw,mn:pick.mn,slots:P.slots,fb:!best,isf:pick.isf||0,gen:Math.round(performance.now()-t0)};
   G.stars=1+(pick.bw===0?1:0)+(pick.mn>=P.slots?1:0);
   G.initial=snapshot();
   save();
