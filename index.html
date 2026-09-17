@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0e1626">
+<title>螺丝解谜</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="icon" href="icon-192.png">
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{height:100%;overflow:hidden;background:#0e1626;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;color:#fff}
+body{display:flex;align-items:center;justify-content:center;
+  touch-action:none;overscroll-behavior:none;user-select:none;-webkit-user-select:none}
+#app{position:relative;display:flex;flex-direction:column;width:100%;max-width:520px;height:100%;
+  overflow:hidden;background:#bfe3f7;box-shadow:0 0 60px rgba(0,0,0,.55);
+  padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+canvas{display:block;flex:1;width:100%;min-height:0}
+#overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+  background:rgba(10,20,38,.5);-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px);padding:24px;z-index:5}
+#overlay.on{display:flex}
+.panel{width:100%;max-width:320px;background:linear-gradient(180deg,#ffffff,#eef4ff);color:#22314d;
+  border-radius:24px;padding:22px 20px 20px;text-align:center;box-shadow:0 18px 44px rgba(0,0,0,.4);
+  animation:pop .25s cubic-bezier(.2,1.3,.5,1)}
+@keyframes pop{from{transform:scale(.8);opacity:0}to{transform:scale(1);opacity:1}}
+.panel .big{font-size:40px;line-height:1;margin-bottom:8px}
+.panel h2{font-size:21px;margin-bottom:6px;letter-spacing:.5px}
+.panel p{font-size:13.5px;color:#61718d;margin-bottom:14px;line-height:1.6}
+.btn{display:block;width:100%;padding:13px;border:0;border-radius:15px;font-size:16px;font-weight:700;
+  color:#fff;background:linear-gradient(180deg,#5aa9ff,#2f7de0);box-shadow:0 4px 0 #2461b0;
+  margin-top:10px;cursor:pointer;font-family:inherit;transition:transform .05s}
+.btn:active{transform:translateY(3px);box-shadow:0 1px 0 #2461b0}
+.btn.green{background:linear-gradient(180deg,#6fd85a,#3fae2e);box-shadow:0 4px 0 #2f8722}
+.btn.green:active{box-shadow:0 1px 0 #2f8722}
+.btn.gray{background:linear-gradient(180deg,#c3cedd,#93a3ba);box-shadow:0 4px 0 #74849b}
+.btn.gray:active{box-shadow:0 1px 0 #74849b}
+.row{display:flex;gap:6px}.row .btn{margin-top:10px;padding:11px 0;font-size:14px}
+#lvInput{width:100%;padding:12px;font-size:22px;font-weight:800;text-align:center;
+  border:2px solid #cfd8e6;border-radius:12px;color:#22314d;font-family:inherit;margin-bottom:2px;background:#fff}
+#toast{position:absolute;left:50%;transform:translateX(-50%);bottom:24%;background:rgba(16,28,48,.9);
+  color:#fff;padding:10px 18px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;
+  pointer-events:none;white-space:nowrap;z-index:6}
+#toast.on{opacity:1}
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="cv"></canvas>
+  <div id="toast"></div>
+  <div id="overlay"><div class="panel" id="panel"></div></div>
+</div>
+<script>
+"use strict";
+/* ===================== 基础工具 ===================== */
+const cv=document.getElementById('cv'), ctx=cv.getContext('2d');
+const overlay=document.getElementById('overlay'), panelEl=document.getElementById('panel'), toastEl=document.getElementById('toast');
+let W=400,H=700,S=1,DPR=1;
+
+const rnd=(a,b)=>a+Math.random()*(b-a);
+const rndi=(a,b)=>Math.floor(a+Math.random()*(b-a+1));
+const pick=a=>a[Math.floor(Math.random()*a.length)];
+const clamp=(v,a,b)=>v<a?a:(v>b?b:v);
+const lerp=(a,b,t)=>a+(b-a)*t;
+const easeOut=t=>1-Math.pow(1-t,3);
+const easeIO=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+function shuffle(a){for(let i=a.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));const t=a[i];a[i]=a[j];a[j]=t;}return a;}
+function shade(hex,amt){const n=parseInt(hex.slice(1),16);let r=(n>>16)&255,g=(n>>8)&255,b=n&255;
+  if(amt>0){r+=(255-r)*amt;g+=(255-g)*amt;b+=(255-b)*amt;}else{const k=1+amt;r*=k;g*=k;b*=k;}
+  return 'rgb('+(r|0)+','+(g|0)+','+(b|0)+')';}
+function hexa(hex,a){const n=parseInt(hex.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';}
+function rrPath(x,y,w,h,r){r=Math.min(r,w/2,h/2);ctx.beginPath();
+  ctx.moveTo(x+r,y);ctx.lineTo(x+w-r,y);ctx.quadraticCurveTo(x+w,y,x+w,y+r);
+  ctx.lineTo(x+w,y+h-r);ctx.quadraticCurveTo(x+w,y+h,x+w-r,y+h);
+  ctx.lineTo(x+r,y+h);ctx.quadraticCurveTo(x,y+h,x,y+h-r);
+  ctx.lineTo(x,y+r);ctx.quadraticCurveTo(x,y,x+r,y);ctx.closePath();}
+
+/* ===================== 配色 ===================== */
+const SC =['#f2453d','#57c22b','#2f79ef','#9b4fe0','#f5821f','#17bfd4','#ff5b9e',
+           '#f6c522','#0f8a52','#8b5a2b','#b8d117','#1f3fa8','#8e1b1b','#c2185b'];
+// 螺丝头槽形状：颜色多了以后靠形状二次区分（相近色号一定不同形）
+const GLY=['X','+','S','X','D','O','O','=','S','-','Y','Y','=','T'];
+const PC =['#ff9ed3','#b7a3ff','#8fd8f6','#8ae7c6','#ffb492','#ff9f9f','#cbe98d','#ffd98a','#9fc6ff'];
+
+/* ===================== 状态 ===================== */
+const G={
+  level:1, plates:[], screws:[], boxes:[], queue:[], qi:0, temp:[], slots:6,
+  anims:[], timers:[], history:[], status:'play', gen:{w:1000,h:1000,R:32},
+  addSlotLeft:2, sound:true, moves:0, sparks:[], best:{}
+};
+let L={};
+
+/* ===================== 音效 ===================== */
+let AC=null;
+function audio(){ if(!AC){ try{AC=new (window.AudioContext||window.webkitAudioContext)();}catch(e){} } if(AC&&AC.state==='suspended')AC.resume(); return AC; }
+function beep(f1,f2,dur,type,vol){ if(!G.sound)return; const ac=audio(); if(!ac)return;
+  const o=ac.createOscillator(), g=ac.createGain(); o.type=type||'sine';
+  const t=ac.currentTime; o.frequency.setValueAtTime(f1,t);
+  if(f2&&f2!==f1) o.frequency.exponentialRampToValueAtTime(Math.max(40,f2),t+dur);
+  g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol||0.16,t+0.012);
+  g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+  o.connect(g); g.connect(ac.destination); o.start(t); o.stop(t+dur+0.02); }
+const SFX={
+  pick:()=>beep(520,880,0.09,'triangle',0.13),
+  land:()=>beep(300,200,0.07,'sine',0.11),
+  full:()=>{beep(660,660,0.1,'triangle',0.13);setTimeout(()=>beep(880,880,0.1,'triangle',0.13),90);setTimeout(()=>beep(1180,1180,0.16,'triangle',0.13),180);},
+  fall:()=>beep(180,70,0.22,'sawtooth',0.1),
+  err :()=>beep(200,150,0.16,'square',0.09),
+  win :()=>{[523,659,784,1046].forEach((f,i)=>setTimeout(()=>beep(f,f,0.18,'triangle',0.14),i*105));}
+};
+
+/* ===================== 几何 ===================== */
+function sdRR(lx,ly,w,h,r){const qx=Math.abs(lx)-w/2+r, qy=Math.abs(ly)-h/2+r;
+  return Math.min(Math.max(qx,qy),0)+Math.hypot(Math.max(qx,0),Math.max(qy,0))-r;}
+function plateSD(p,gx,gy){const dx=gx-p.cx,dy=gy-p.cy;
+  const lx=dx*p.cos+dy*p.sin, ly=-dx*p.sin+dy*p.cos; return sdRR(lx,ly,p.w,p.h,p.r);}
+function ptInPlate(p,gx,gy){return plateSD(p,gx,gy)<=0;}
+// 只要螺丝圆盘有任何一点被上层板块盖到就不可点（SDF < 半径 即相交）
+function isBlocked(s){ const pz=G.plates[s.pid].z, R=G.gen.R;
+  for(let i=0;i<G.plates.length;i++){const q=G.plates[i];
+    if(q.fallen||q.z<=pz) continue; if(plateSD(q,s.x,s.y)<R) return true;} return false; }
+
+/* ===================== 关卡参数 ===================== */
+function levelParams(n){
+  const wave=[0,0,1,0,2,0,1,2,1,0][(n-1)%10];          // 难度波浪曲线
+  const plates=clamp(3+Math.round((n-1)/2.2)+wave,3,16);
+  // 颜色数恒大于盒子数(3)：3色以下没有任何压力
+  const colors = n<=2?4 : n<=5?5 : n<=10?6 : n<=25?8 : n<=50?10 : clamp(11+Math.floor((n-50)/25),11,14);
+  const slots  = n<=2?7 : n<=5?6 : n<=25?5 : 4;
+  const maxScrew = n<=4?3 : (n<=10?4:5);
+  const target = clamp(Math.round(9+n*1.15)+wave*3,12,45);  // 目标螺丝总数（>=12 才凑得出 4 组 4 色）
+  // 难度闸门：允许 bot 通关率的上限（0 = 笨策略必须全败）
+  const botMax = n<=3?1 : n<=6?0.5 : n<=12?0.2 : 0;
+  return {plates,colors,slots,maxScrew,target,botMax,wave};
+}
+
+/* ===================== 关卡生成 ===================== */
+function tryGen(n,P){
+  const bw=L.board.w, bh=L.board.h;
+  const gw=1000, gh=1000*bh/bw;
+  const R=clamp(13000/bw,24,42);
+  const f=clamp(1.20-P.plates*0.034,0.74,1.08);
+  const pal=shuffle(PC.slice());
+  const plates=[];
+  const asp=gh/gw;
+  const baseW=R*9.6*f, baseH=R*7.9*f;
+  const K=0.52;                                          // 网格比板块小 -> 必然层叠（越小越深）
+  const TA=1.14;                                         // 整簇目标长宽比（接近正方形，铺满宽度）
+  let cols=1,rows=P.plates,bd=1e9;                       // 选行列数，使整簇长宽比贴近屏幕
+  for(let c=1;c<=P.plates;c++){
+    const r=Math.ceil(P.plates/c);
+    const d=Math.abs(Math.log((baseH*(r*K+1))/(baseW*(c*K+1))/TA));
+    if(d<bd){bd=d;cols=c;rows=r;}
+  }
+  const spanW=cols*baseW*K, spanH=rows*baseH*K;
+  const cwid=spanW/cols, chei=spanH/rows;
+  const gx0=(gw-spanW)/2, gy0=(gh-spanH)/2;
+  const cells=shuffle(Array.from({length:rows*cols},(_,k)=>k));
+  for(let i=0;i<P.plates;i++){
+    const cell=cells[i], ccol=cell%cols, crow=Math.floor(cell/cols);
+    const pill=Math.random()<0.34;
+    let w=baseW*rnd(0.82,1.26), h=baseH*rnd(0.78,1.28);
+    if(pill) h=Math.min(h,w*0.60);
+    const rot=rnd(-0.95,0.95);
+    const co=Math.cos(rot), si=Math.sin(rot);
+    const cx=gx0+(ccol+0.5)*cwid+rnd(-0.24,0.24)*cwid;
+    const cy=gy0+(crow+0.5)*chei+rnd(-0.24,0.24)*chei;
+    plates.push({id:i,z:i,cx,cy,w,h,rot,cos:co,sin:si,r:pill?h/2:rnd(R*0.7,R*1.4),
+      color:pal[i%pal.length],fallen:false,n:0,fall:null,shake:null});
+  }
+
+  // 撒螺丝：必须清晰地"完全在本板块内"，且相对上层板块"要么完全被压住、要么完全露出"
+  const screws=[];
+  const tryPlace=(p,deep)=>{
+    let cand=null, cdep=-1, seen=0;
+    for(let t=0;t<260;t++){
+      const lx=rnd(-p.w/2,p.w/2), ly=rnd(-p.h/2,p.h/2);
+      if(sdRR(lx,ly,p.w,p.h,p.r)>-(R+8)) continue;
+      const gx=p.cx+lx*p.cos-ly*p.sin, gy=p.cy+lx*p.sin+ly*p.cos;
+      let ok=true, dep=0;
+      for(const q of plates){ if(q.z<=p.z) continue;
+        const d=plateSD(q,gx,gy);
+        if(d>R*0.30&&d<R*1.50){ ok=false; break; }     // 擦边/毫米级缝隙 -> 看不出来，不要
+        if(d<R*0.30) dep++;                            // 被这块板明显盖住
+      }
+      if(!ok) continue;
+      for(const s of screws){ const d=Math.hypot(s.x-gx,s.y-gy);
+        if(d < (s.pid===p.id ? R*2.35 : R*1.55)){ ok=false; break; } }
+      if(!ok) continue;
+      if(!deep){ cand={gx,gy}; break; }
+      if(dep>cdep){ cdep=dep; cand={gx,gy}; }          // 在候选里挑埋得最深的
+      if(++seen>=10||cdep>=3) break;
+    }
+    if(!cand) return false;
+    screws.push({id:screws.length,pid:p.id,x:cand.gx,y:cand.gy,rot:0,
+      color:0,state:'board',slot:-1,box:null,fly:null});
+    p.n++; return true;
+  };
+  for(const p of plates){
+    p.n=0;
+    const want=clamp(Math.round(Math.sqrt(p.w*p.h)/(R*3.0)),1,P.maxScrew);
+    for(let i=0;i<want;i++) tryPlace(p,true);
+    if(p.n===0) return null;
+  }
+  let g2=0;
+  while(screws.length<P.target&&g2++<90){          // 补足到目标数量
+    let added=false;
+    for(const p of shuffle(plates.filter(q=>q.n<P.maxScrew+2))){
+      if(screws.length>=P.target) break;
+      if(tryPlace(p,true)) added=true;
+    }
+    if(!added) break;
+  }
+  // 螺丝总数补成 3 的倍数（每个盒子 3 格）
+  let guard=0;
+  while(screws.length%3!==0&&guard++<40){
+    const cand=plates.filter(p=>p.n>1); if(!cand.length) return null;
+    cand.sort((a,b)=>b.n-a.n);
+    const p=cand[0];
+    for(let i=screws.length-1;i>=0;i--) if(screws[i].pid===p.id){screws.splice(i,1);p.n--;break;}
+    screws.forEach((s,i)=>s.id=i);
+  }
+  if(screws.length<3) return null;
+  // 把整簇板块缩放居中到可玩区域（板块少时自动放大，手感更"厚实"）
+  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9;
+  for(const p of plates){
+    const ex=(Math.abs(p.cos)*p.w+Math.abs(p.sin)*p.h)/2, ey=(Math.abs(p.sin)*p.w+Math.abs(p.cos)*p.h)/2;
+    mnx=Math.min(mnx,p.cx-ex);mxx=Math.max(mxx,p.cx+ex);
+    mny=Math.min(mny,p.cy-ey);mxy=Math.max(mxy,p.cy+ey);
+  }
+  const mg=R*0.7; mnx-=mg;mny-=mg;mxx+=mg;mxy+=mg;
+  let cw=mxx-mnx, ch=mxy-mny;
+  if(ch/cw<asp) ch=cw*asp; else cw=ch/asp;
+  const minW=R*19;                       // 限制最大放大倍数，螺丝不至于过大
+  if(cw<minW){ ch*=minW/cw; cw=minW; }
+  const ox=mnx-(cw-(mxx-mnx))/2, oy=mny-(ch-(mxy-mny))/2;
+  for(const p of plates){p.cx-=ox;p.cy-=oy;}
+  for(const s of screws){s.x-=ox;s.y-=oy;}
+
+  // 反推一条合法拆解顺序（自上而下剥离，必然存在）
+  const seq=peelOrder(plates,screws,R); if(!seq) return null;
+  // 沿合法顺序每 3 个一组染色 —— 保证「照着顺序拆」一定通得过
+  // 每色数量必然是 3 的倍数；各色尽量平均分配
+  const pool=shuffle(SC.map((c,i)=>i)).slice(0,P.colors);
+  const nG=Math.floor(seq.length/3);
+  const queue=[];
+  for(let g=0;g<nG;g++){
+    const c=pool[g%pool.length]; queue.push(c);
+    for(let k=0;k<3;k++) seq[g*3+k].color=c;
+  }
+  // 注意：queue 此刻 = 构造序（照着拆一定通关），难度闸门会在 newLevel 里挑一个更狠的排列
+  return {plates,screws,queue,seq:seq.map(s=>s.id),gen:{w:cw,h:ch,R}};
+}
+
+function peelOrder(plates,screws,R){
+  const left={}; plates.forEach(p=>{left[p.id]=0;p.fallen=false;});
+  screws.forEach(s=>left[s.pid]++);
+  const taken=new Set(), seq=[]; let last=-1, guard=0;
+  while(seq.length<screws.length&&guard++<4000){
+    let avail=screws.filter(s=>!taken.has(s.id)&&!isBlockedIn(plates,s,R));
+    if(!avail.length){plates.forEach(p=>p.fallen=false);return null;}
+    const same=avail.filter(s=>s.pid===last);
+    if(same.length&&Math.random()<0.45) avail=same;
+    const s=pick(avail); taken.add(s.id); seq.push(s); last=s.pid;
+    if(--left[s.pid]===0) plates[s.pid].fallen=true;
+  }
+  plates.forEach(p=>p.fallen=false);
+  return seq.length===screws.length?seq:null;
+}
+function isBlockedIn(plates,s,R){const pz=plates[s.pid].z;
+  for(const q of plates){ if(q.fallen||q.z<=pz) continue; if(plateSD(q,s.x,s.y)<R) return true; } return false;}
+
+/* ===================== 快速纯逻辑模拟器 =====================
+   与真实引擎规则逐条一致（matchBox 的"同色优先填最满"、临时孔位、flushTemp 级联、
+   endgame 盘面清空后换掉空盒子收尾）。单局约 0.08ms，用来做两件事：
+   1) 证明某个盒子队列确实有解（有解证明 => 保证能通关）
+   2) 用几种笨策略证明它不平凡（难度闸门）                                        */
+function simBuild(plates,screws,queue,slots,R){
+  const nP=plates.length,nS=screws.length;
+  const cov=[],coveredBy=Array.from({length:nP},()=>[]);
+  for(let i=0;i<nS;i++){
+    const s=screws[i],pz=plates[s.pid].z,list=[];
+    for(const q of plates){ if(q.z<=pz) continue;
+      if(plateSD(q,s.x,s.y)<R){ list.push(q.id); coveredBy[q.id].push(i); } }
+    cov.push(list);
+  }
+  const plateN=plates.map(()=>0); screws.forEach(s=>plateN[s.pid]++);
+  return {nP,nS,pid:screws.map(s=>s.pid),color:screws.map(s=>s.color),plateN,cov,coveredBy,queue,slots};
+}
+function simInit(L){
+  const st={left:L.plateN.slice(),blk:L.cov.map(c=>c.length),ss:new Int8Array(L.nS),
+    boxCol:[],boxCnt:[0,0,0],boxIt:[[],[],[]],qi:0,
+    temp:new Array(L.slots).fill(-1),tid:new Array(L.slots).fill(-1),gone:0};
+  for(let i=0;i<3;i++) st.boxCol.push(st.qi<L.queue.length?L.queue[st.qi++]:-1);
+  return st;
+}
+function simMatch(st,c){ let bi=-1,best=-1;
+  for(let i=0;i<3;i++){ if(st.boxCol[i]!==c||st.boxCnt[i]>=3) continue;
+    if(st.boxCnt[i]>best){best=st.boxCnt[i];bi=i;} }
+  return bi; }
+function simSettle(L,st){ let ch=true;
+  while(ch){ ch=false;
+    for(let b=0;b<3;b++) if(st.boxCnt[b]>=3){
+      for(const k of st.boxIt[b]){ st.ss[k]=3; st.gone++; }
+      st.boxIt[b]=[]; st.boxCnt[b]=0;
+      st.boxCol[b]=st.qi<L.queue.length?L.queue[st.qi++]:-1; ch=true; }
+    for(let sl=0;sl<st.temp.length;sl++){ const c=st.temp[sl]; if(c<0) continue;
+      const bi=simMatch(st,c); if(bi<0) continue;
+      const id=st.tid[sl]; st.temp[sl]=-1; st.tid[sl]=-1;
+      st.boxCnt[bi]++; st.boxIt[bi].push(id); st.ss[id]=2; ch=true; } } }
+function simTake(L,st,i){
+  const c=L.color[i], bi=simMatch(st,c);
+  if(bi>=0){ st.boxCnt[bi]++; st.boxIt[bi].push(i); st.ss[i]=2; }
+  else { const sl=st.temp.indexOf(-1); if(sl<0) return false;
+    st.temp[sl]=c; st.tid[sl]=i; st.ss[i]=1; }
+  const p=L.pid[i]; if(--st.left[p]===0) for(const k of L.coveredBy[p]) st.blk[k]--;
+  simSettle(L,st);
+  if(st.temp.indexOf(-1)<0){          // 规则：孔位全满即失败（盘面已清空则由 simEnd 收尾）
+    for(let j=0;j<L.nS;j++) if(st.ss[j]===0) return false;
+  }
+  return true; }
+function simEnd(L,st){ let g=0;
+  while(g++<300){ simSettle(L,st);
+    if(!st.temp.some(c=>c>=0)) return;
+    let idx=-1; for(let b=0;b<3;b++) if(st.boxCnt[b]===0){ idx=b; break; }
+    if(idx>=0&&st.qi<L.queue.length){ st.boxCol[idx]=L.queue[st.qi++]; continue; }
+    for(let sl=0;sl<st.temp.length;sl++) if(st.tid[sl]>=0){
+      st.ss[st.tid[sl]]=3; st.gone++; st.temp[sl]=-1; st.tid[sl]=-1; }
+    return; } }
+function simPlay(L,pol){
+  const st=simInit(L); let g=0;
+  while(g++<700){
+    const acc=[]; for(let i=0;i<L.nS;i++) if(st.ss[i]===0&&st.blk[i]===0) acc.push(i);
+    if(!acc.length) break;
+    const i=pol(L,st,acc); if(i==null) break;
+    if(!simTake(L,st,i)) break;
+  }
+  let onBoard=false; for(let i=0;i<L.nS;i++) if(st.ss[i]===0){ onBoard=true; break; }
+  if(!onBoard) simEnd(L,st);
+  return st.gone===L.nS; }
+function qpos(L,st,c){ const i=L.queue.indexOf(c,st.qi); return i<0?99:i-st.qi; }
+// 笨策略 1：看到能进盒子的就拿，否则随便拿一颗塞孔位
+function tempFree(st){ let f=0; for(const c of st.temp) if(c<0) f++; return f; }
+const POL_GREEDY=(L,st,acc)=>{ for(const i of acc) if(simMatch(st,L.color[i])>=0) return i;
+  const f=tempFree(st); return (f>=2||(f>=1&&acc.length===1))?acc[0]:null; };
+// 笨策略 2：优先填最满的盒子，否则拿"颜色在队列里最早出现"的
+const POL_QUEUE=(L,st,acc)=>{ let bi=-1,bc=-1;
+  for(const i of acc){ const m=simMatch(st,L.color[i]); if(m>=0&&st.boxCnt[m]>bc){ bc=st.boxCnt[m]; bi=i; } }
+  if(bi>=0) return bi;
+  { const f=tempFree(st); if(!(f>=2||(f>=1&&acc.length===1))) return null; }
+  let best=null,bv=1e9;
+  for(const i of acc){ const v=qpos(L,st,L.color[i]); if(v<bv){ bv=v; best=i; } }
+  return best; };
+// 笨策略 3：随机乱点
+const POL_RAND=(L,st,acc)=>{ const ok=[], f=tempFree(st), canTemp=f>=2||(f>=1&&acc.length===1);
+  for(const i of acc) if(simMatch(st,L.color[i])>=0||canTemp) ok.push(i);
+  return ok.length?ok[Math.floor(Math.random()*ok.length)]:null; };
+// 找解策略：带随机性的较强策略，用于随机重启搜索"存在解"的证据
+const POL_SEARCH=(L,st,acc)=>{
+  const m=[]; for(const i of acc){ const b=simMatch(st,L.color[i]); if(b>=0) m.push([i,st.boxCnt[b]]); }
+  if(m.length){ m.sort((a,b)=>b[1]-a[1]);
+    return Math.random()<0.78?m[0][0]:m[Math.floor(Math.random()*m.length)][0]; }
+  { const f=tempFree(st); if(!(f>=2||(f>=1&&acc.length===1))) return null; }
+  let best=null,bv=1e9;
+  for(const i of acc){ const v=qpos(L,st,L.color[i])+Math.random()*3.2; if(v<bv){ bv=v; best=i; } }
+  return best; };
+function simWitness(L,restarts){ for(let k=0;k<restarts;k++) if(simPlay(L,POL_SEARCH)) return k+1; return 0; }
+// 同上，但把找到的那条通关线记下来 —— 作为"这一关确实能通"的证据随关卡一起保存
+function simWitnessLine(L,restarts){
+  for(let k=0;k<restarts;k++){
+    const rec=[];
+    const pol=(LL,st,acc)=>{ const i=POL_SEARCH(LL,st,acc); if(i!=null) rec.push(i); return i; };
+    if(simPlay(L,pol)) return rec;
+  }
+  return null; }
+function simBotWin(L,nRand){ let w=0,t=0;
+  for(const pol of [POL_GREEDY,POL_QUEUE]){ t++; if(simPlay(L,pol)) w++; }
+  for(let k=0;k<nRand;k++){ t++; if(simPlay(L,POL_RAND)) w++; }
+  return w/t; }
+// 从任意局面（撤销快照）重建模拟状态，用来判断"这一步之后还能不能通关"
+function simFromSnap(L,sn){
+  const st={left:sn.plates.map(p=>p.n),blk:new Array(L.nS).fill(0),ss:new Int8Array(L.nS),
+    boxCol:sn.boxes.map(b=>b.c),boxCnt:sn.boxes.map(b=>b.it.length),boxIt:sn.boxes.map(b=>b.it.slice()),
+    qi:sn.qi,temp:new Array(sn.slots).fill(-1),tid:new Array(sn.slots).fill(-1),gone:0};
+  while(st.boxCol.length<3){ st.boxCol.push(-1); st.boxCnt.push(0); st.boxIt.push([]); }
+  for(let i=0;i<L.nS;i++){
+    const t=sn.screws[i].st;
+    st.ss[i]= t==='board'?0 : t==='temp'?1 : t==='box'?2 : 3;
+    if(st.ss[i]===3) st.gone++;
+    let b=0; for(const q of L.cov[i]) if(!sn.plates[q].f) b++;
+    st.blk[i]=b;
+  }
+  sn.temp.forEach((id,k)=>{ if(id>=0){ st.temp[k]=L.color[id]; st.tid[k]=id; } });
+  return st;
+}
+function simClone(st){ return {left:st.left.slice(),blk:st.blk.slice(),ss:st.ss.slice(),
+  boxCol:st.boxCol.slice(),boxCnt:st.boxCnt.slice(),boxIt:st.boxIt.map(a=>a.slice()),
+  qi:st.qi,temp:st.temp.slice(),tid:st.tid.slice(),gone:st.gone}; }
+function simPlayFrom(L,st0,pol){
+  const st=simClone(st0); let g=0;
+  while(g++<700){
+    const acc=[]; for(let i=0;i<L.nS;i++) if(st.ss[i]===0&&st.blk[i]===0) acc.push(i);
+    if(!acc.length) break;
+    const i=pol(L,st,acc); if(i==null) break;
+    if(!simTake(L,st,i)) break;
+  }
+  let onBoard=false; for(let i=0;i<L.nS;i++) if(st.ss[i]===0){ onBoard=true; break; }
+  if(!onBoard) simEnd(L,st);
+  return st.gone===L.nS;
+}
+function solvableSnap(sn,restarts){
+  const L=simBuild(G.plates,G.screws,G.queue,sn.slots,G.gen.R);
+  const st0=simFromSnap(L,sn);
+  for(let k=0;k<restarts;k++) if(simPlayFrom(L,st0,POL_SEARCH)) return true;
+  return false;
+}
+// 往回找最近一个"还能通关"的局面（替代重玩：试错不用从头再来）
+function rewindToSolvable(){
+  if(!G.history.length){ toast('还没走过任何一步'); return false; }
+  for(let i=G.history.length-1;i>=0;i--){
+    if(solvableSnap(G.history[i],110)){
+      const back=G.history.length-i;
+      const sn=G.history[i]; G.history.length=i;
+      restore(sn); G.status='play'; hidePanel();
+      toast('已回退 '+back+' 步到还能通关的局面'); SFX.land(); return true;
+    }
+  }
+  G.history.length=0; restore(G.initial); G.status='play'; hidePanel();
+  toast('已回到开局（这一关一定有解）'); return true;
+}
+function simMinSlots(L,restarts){         // 最少要几个临时孔位才有解 —— 关卡"紧张度"
+  for(let sl=1;sl<=L.slots;sl++) if(simWitness({...L,slots:sl},restarts)) return sl;
+  return L.slots; }
+
+function newLevel(n){
+  const P=levelParams(n);
+  const t0=performance.now(), BUDGET=240;
+  let fallback=null, best=null;
+  for(let geo=0; geo<26; geo++){
+    const cand=tryGen(n,P);
+    if(!cand) continue;
+    // tryGen 返回的 queue 就是"构造序"：照着拆解顺序装箱，0 个孔位也一定通关 —— 保底可通关
+    if(!fallback) fallback={lv:cand,q:cand.queue.slice(),mn:1,bw:1,line:cand.seq};
+    if(P.botMax>=1) break;                       // 前几关就用构造序，保持简单
+    const L0=simBuild(cand.plates,cand.screws,cand.queue,P.slots,cand.gen.R);
+    for(let k=0;k<200;k++){
+      if(performance.now()-t0>BUDGET) break;
+      const q=shuffle(cand.queue.slice());       // 把盒子队列打散 —— 难度主来源
+      const L={...L0,queue:q};
+      const bw=simBotWin(L,3);                   // 便宜：笨策略先筛
+      if(bw>P.botMax) continue;
+      const line=simWitnessLine(L,260);          // 贵：必须找到一条通关线，否则丢弃
+      if(!line) continue;
+      const mn=simMinSlots(L,45);
+      const score=mn*100-bw*60;
+      if(!best||score>best.score) best={lv:cand,q,score,mn,bw,line};
+      if(mn>=P.slots&&bw===0) break;             // 已经顶满，不用再找
+    }
+    if(best||performance.now()-t0>BUDGET) break;
+  }
+  const pick=best||fallback;
+  G.level=n; G.plates=pick.lv.plates; G.screws=pick.lv.screws; G.gen=pick.lv.gen;
+  G.queue=pick.q; G.qi=0; G.slots=P.slots; G.temp=new Array(P.slots).fill(null);
+  G.boxes=[]; for(let i=0;i<3;i++) G.boxes.push(mkBox(G.qi<G.queue.length?G.queue[G.qi++]:-1));
+  G.anims=[]; G.timers=[]; G.history=[]; G.sparks=[]; G.status='play'; G.moves=0;
+  G.addSlotLeft=2; G.total=G.screws.length;
+  G.solution=pick.line;                        // 已验证的通关线（保证这一关能通）
+  G.diff={bw:pick.bw,mn:pick.mn,slots:P.slots,fb:!best,gen:Math.round(performance.now()-t0)};
+  G.stars=1+(pick.bw===0?1:0)+(pick.mn>=P.slots?1:0);
+  G.initial=snapshot();
+  save();
+}
+function mkBox(color){return {color,items:[],pop:null,slide:null};}
+
+/* ===================== 布局 ===================== */
+function layoutAll(){
+  const r=cv.getBoundingClientRect();
+  W=Math.max(280,r.width); H=Math.max(360,r.height); S=clamp(W/400,0.72,1.55);
+  DPR=Math.min(window.devicePixelRatio||1,3);
+  cv.width=Math.round(W*DPR); cv.height=Math.round(H*DPR);
+  ctx.setTransform(DPR,0,0,DPR,0,0);
+  const pad=11*S;
+  const topY=6*S, topH=34*S;
+  const boxY=topY+topH+6*S, boxH=Math.min(90*S,H*0.15);
+  const tempY=boxY+boxH+4*S, tempH=40*S;
+  const barY=tempY+tempH+4*S, barH=5*S;
+  const toolH=Math.min(56*S,H*0.09), toolY=H-toolH-9*S;
+  const by=barY+barH+10*S;
+  L={W,H,S,pad,top:{y:topY,h:topH},boxRow:{y:boxY,h:boxH},tempRow:{y:tempY,h:tempH},
+     bar:{y:barY,h:barH},tools:{y:toolY,h:toolH},
+     board:{x:pad*0.6,y:by,w:W-pad*1.2,h:Math.max(140,toolY-by-10*S)}};
+  const qw=34*S;
+  const bw=Math.min(74*S,(W-qw-30*S)/3.35), bh=Math.min(bw*1.16,boxH);
+  const gap=Math.min(15*S,(W-qw-24*S-bw*3)/2);
+  L.box={w:bw,h:bh,gap,x:(W-qw-(bw*3+gap*2))/2,y:boxY+(boxH-bh)/2,qx:W-qw/2-6*S};
+  refitGen();
+}
+// 屏幕比例变了（旋转/改窗口）也让板块群继续铺满可玩区
+function refitGen(){
+  if(!G.plates||!G.plates.length||!G.gen||!G.gen.R) return;
+  let mnx=1e9,mny=1e9,mxx=-1e9,mxy=-1e9;
+  for(const p of G.plates){
+    const ex=(Math.abs(p.cos)*p.w+Math.abs(p.sin)*p.h)/2, ey=(Math.abs(p.sin)*p.w+Math.abs(p.cos)*p.h)/2;
+    mnx=Math.min(mnx,p.cx-ex);mxx=Math.max(mxx,p.cx+ex);
+    mny=Math.min(mny,p.cy-ey);mxy=Math.max(mxy,p.cy+ey);
+  }
+  const R=G.gen.R, mg=R*0.7;
+  mnx-=mg;mny-=mg;mxx+=mg;mxy+=mg;
+  const asp=L.board.h/L.board.w;
+  let cw=mxx-mnx, ch=mxy-mny;
+  if(ch/cw<asp) ch=cw*asp; else cw=ch/asp;
+  const minW=R*19; if(cw<minW){ ch*=minW/cw; cw=minW; }
+  const ox=mnx-(cw-(mxx-mnx))/2, oy=mny-(ch-(mxy-mny))/2;
+  for(const p of G.plates){ p.cx-=ox; p.cy-=oy; }
+  for(const s of G.screws){ s.x-=ox; s.y-=oy; }
+  G.gen.w=cw; G.gen.h=ch;
+}
+function boxPos(i){return{x:L.box.x+i*(L.box.w+L.box.gap),y:L.box.y,w:L.box.w,h:L.box.h};}
+function boxHole(i,k){const b=boxPos(i),cx=b.x+b.w/2,cy=b.y+b.h*0.54;
+  const o=[[0,-0.18],[-0.20,0.14],[0.20,0.14]][k];
+  return{x:cx+o[0]*b.w,y:cy+o[1]*b.h,r:b.w*0.135};}
+function tempGeom(){const n=G.slots;const r=Math.min(15.5*S,(W-36*S)/(n*2.6));
+  const gap=r*0.85,tw=n*r*2+(n-1)*gap;return{r,gap,x0:(W-tw)/2+r,y:L.tempRow.y+L.tempRow.h/2};}
+function tempPos(i){const t=tempGeom();return{x:t.x0+i*(t.r*2+t.gap),y:t.y,r:t.r};}
+function toolRects(){const gap=9*S,w=(W-2*L.pad-gap*2)/3;
+  return ['undo','slot','retry'].map((id,i)=>({id,x:L.pad+i*(w+gap),y:L.tools.y,w,h:L.tools.h}));}
+function topRects(){const r=16*S,cy=L.top.y+L.top.h/2;
+  return{menu:{x:L.pad+r,y:cy,r},sound:{x:W-L.pad-r,y:cy,r}};}
+function bt(){const s=Math.min(L.board.w/G.gen.w,L.board.h/G.gen.h);
+  return{s,tx:L.board.x+(L.board.w-G.gen.w*s)/2,ty:L.board.y+(L.board.h-G.gen.h*s)/2};}
+function g2s(x,y){const t=bt();return{x:t.tx+x*t.s,y:t.ty+y*t.s};}
+
+/* ===================== 绘制：螺丝 ===================== */
+function glyphPath(g,r){
+  const bw=r*0.33, bl=r*1.30;
+  const bar=(ang,len)=>{ctx.save();ctx.rotate(ang);rrPath(-len/2,-bw/2,len,bw,bw/2);ctx.fill();ctx.restore();};
+  const spoke=(ang)=>{ctx.save();ctx.rotate(ang);rrPath(0,-bw/2,bl*0.52,bw,bw/2);ctx.fill();ctx.restore();};
+  if(g==='X'){ bar(0.7854,bl); bar(-0.7854,bl); }
+  else if(g==='+'){ bar(0,bl); bar(1.5708,bl); }
+  else if(g==='-'){ bar(0,bl); }
+  else if(g==='='){ rrPath(-bl/2,-bw*1.15,bl,bw*0.85,bw*0.42);ctx.fill();
+                    rrPath(-bl/2,bw*0.30,bl,bw*0.85,bw*0.42);ctx.fill(); }
+  else if(g==='Y'){ spoke(-1.5708); spoke(0.5236); spoke(2.6180); }
+  else if(g==='S'){ const a=bl*0.46; rrPath(-a/2,-a/2,a,a,a*0.24);ctx.fill(); }
+  else if(g==='D'){ const a=bl*0.30; ctx.beginPath();ctx.moveTo(0,-a*1.5);ctx.lineTo(a*1.12,0);
+                    ctx.lineTo(0,a*1.5);ctx.lineTo(-a*1.12,0);ctx.closePath();ctx.fill(); }
+  else if(g==='T'){ const a=bl*0.48; ctx.beginPath();ctx.moveTo(0,-a*0.95);ctx.lineTo(a*0.88,a*0.64);
+                    ctx.lineTo(-a*0.88,a*0.64);ctx.closePath();ctx.fill(); }
+  else { ctx.beginPath();ctx.arc(0,0,bl*0.28,0,6.2832);ctx.fill(); }
+}
+function drawScrew(x,y,r,ci,rot,alpha){
+  const hex=SC[ci]||'#8d949e', gl=GLY[ci]||'X';
+  ctx.save(); if(alpha!=null)ctx.globalAlpha*=alpha;
+  ctx.translate(x,y);
+  ctx.fillStyle='rgba(20,45,80,.20)';ctx.beginPath();ctx.arc(0,r*0.18,r,0,6.2832);ctx.fill();
+  const g=ctx.createRadialGradient(-r*.35,-r*.42,r*.08,0,0,r*1.08);
+  g.addColorStop(0,shade(hex,.45));g.addColorStop(.55,hex);g.addColorStop(1,shade(hex,-.25));
+  ctx.fillStyle=g;ctx.beginPath();ctx.arc(0,0,r,0,6.2832);ctx.fill();
+  ctx.lineWidth=Math.max(1,r*0.12);ctx.strokeStyle=shade(hex,-.38);ctx.stroke();
+  ctx.rotate(rot||0);
+  ctx.fillStyle=shade(hex,-.48); glyphPath(gl,r);
+  ctx.save();ctx.globalAlpha*=0.24;ctx.fillStyle='#fff';
+  ctx.translate(-r*0.05,-r*0.07);ctx.scale(0.80,0.80);glyphPath(gl,r);ctx.restore();
+  ctx.rotate(-(rot||0));
+  ctx.beginPath();ctx.arc(-r*.33,-r*.40,r*.28,0,6.2832);
+  ctx.fillStyle='rgba(255,255,255,.30)';ctx.fill();
+  ctx.restore();
+}
+function drawHole(x,y,r,ci){
+  ctx.save();ctx.translate(x,y);
+  ctx.fillStyle='rgba(140,152,168,.55)';ctx.beginPath();ctx.arc(0,0,r,0,6.2832);ctx.fill();
+  ctx.fillStyle='rgba(96,110,130,.55)';ctx.beginPath();ctx.arc(0,-r*0.1,r*0.86,0,6.2832);ctx.fill();
+  if(ci!=null&&ci>=0){ ctx.fillStyle='rgba(255,255,255,.34)'; glyphPath(GLY[ci]||'X',r*0.95); }
+  ctx.restore();
+}
+
+/* ===================== 绘制：板块 ===================== */
+function drawPlate(p,t,opt){
+  opt=opt||{};
+  const c=g2s(p.cx,p.cy);
+  ctx.save();
+  ctx.translate(c.x+(opt.dx||0),c.y+(opt.dy||0));
+  ctx.rotate(p.rot+(opt.rot||0));
+  if(opt.scale) ctx.scale(opt.scale,opt.scale);
+  if(opt.alpha!=null) ctx.globalAlpha*=opt.alpha;
+  const w=p.w*t.s,h=p.h*t.s,r=Math.max(3,p.r*t.s);
+  ctx.shadowColor='rgba(22,50,92,.28)';ctx.shadowBlur=9*S;ctx.shadowOffsetY=4*S;
+  ctx.fillStyle='rgba(255,255,255,.94)';
+  rrPath(-w/2,-h/2,w,h,r);ctx.fill();
+  ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;
+  const ins=Math.min(5.5*S,h*0.12);
+  ctx.fillStyle=hexa(p.color,.80);
+  rrPath(-w/2+ins,-h/2+ins,w-ins*2,h-ins*2,Math.max(2,r-ins));ctx.fill();
+  ctx.save();ctx.clip();
+  const gg=ctx.createLinearGradient(0,-h/2,0,h/2);
+  gg.addColorStop(0,'rgba(255,255,255,.50)');gg.addColorStop(.4,'rgba(255,255,255,.06)');
+  gg.addColorStop(1,'rgba(255,255,255,.22)');
+  ctx.fillStyle=gg;ctx.fillRect(-w/2,-h/2,w,h);
+  ctx.beginPath();ctx.moveTo(-w/2,h*0.1);ctx.lineTo(w/2,-h*0.42);ctx.lineTo(w/2,-h*0.2);
+  ctx.lineTo(-w/2,h*0.3);ctx.closePath();ctx.fillStyle='rgba(255,255,255,.14)';ctx.fill();
+  ctx.restore();
+  ctx.restore();
+}
+function drawBoard(){
+  const t=bt();
+  const sorted=G.plates.slice().sort((a,b)=>a.z-b.z);
+  for(const p of sorted){
+    if(p.fallen) continue;
+    const opt={};
+    if(p.shake){const k=1-p.shake.t/p.shake.dur;opt.dx=Math.sin(p.shake.t*46)*5.5*S*k;}
+    drawPlate(p,t,opt);
+    for(const s of G.screws){
+      if(s.pid!==p.id||s.state!=='board') continue;
+      const q=g2s(s.x,s.y);
+      drawScrew(q.x,q.y,G.gen.R*t.s,s.color,s.rot,isBlocked(s)?0.46:1);
+    }
+  }
+  for(const p of sorted){
+    if(!p.fall) continue;
+    const k=p.fall.t/p.fall.dur;
+    drawPlate(p,t,{alpha:1-k*k,scale:1-0.35*k,dy:k*k*70*S,rot:p.fall.dir*k*0.7});
+  }
+}
+
+/* ===================== 绘制：盒子 / 孔位 ===================== */
+function drawBoxAt(b,i,x,y,w,h,sc,alpha){
+  ctx.save();ctx.globalAlpha*=(alpha==null?1:alpha);
+  ctx.translate(x+w/2,y+h/2);if(sc&&sc!==1)ctx.scale(sc,sc);ctx.translate(-w/2,-h/2);
+  const hx=w*0.26,hw=w*0.48,hh=h*0.15;
+  ctx.fillStyle='#9aa7b6';rrPath(hx,-hh*0.55,hw,hh*1.5,hh*0.45);ctx.fill();
+  ctx.fillStyle='#b6c1cd';rrPath(hx+w*0.03,-hh*0.35,hw-w*0.06,hh*0.7,hh*0.3);ctx.fill();
+  const col=b.color>=0?SC[b.color]:'#b9c4d0';
+  ctx.shadowColor='rgba(20,45,80,.22)';ctx.shadowBlur=7*S;ctx.shadowOffsetY=3*S;
+  ctx.fillStyle=col;rrPath(0,h*0.06,w,h*0.94,w*0.17);ctx.fill();
+  ctx.shadowColor='transparent';ctx.shadowBlur=0;ctx.shadowOffsetY=0;
+  ctx.fillStyle=shade(col,-.30);rrPath(0,h*0.70,w,h*0.30,w*0.15);ctx.fill();
+  ctx.fillStyle=shade(col,.25);rrPath(w*0.05,h*0.10,w*0.90,h*0.12,w*0.06);ctx.fill();
+  const ix=w*0.10,iy=h*0.18,iw=w*0.80,ih=h*0.52;
+  ctx.fillStyle='#eef1f5';rrPath(ix,iy,iw,ih,w*0.10);ctx.fill();
+  ctx.fillStyle='rgba(0,0,0,.05)';rrPath(ix,iy,iw,ih*0.28,w*0.10);ctx.fill();
+  for(let k=0;k<3;k++){
+    const o=[[0,-0.17],[-0.20,0.15],[0.20,0.15]][k];
+    const cx=w/2+o[0]*w, cy=iy+ih/2+o[1]*h, rr=w*0.135;
+    const it=b.items[k];
+    if(it&&it.state==='box') drawScrew(cx,cy,rr,b.color,it.rot);
+    else drawHole(cx,cy,rr,b.color);
+  }
+  ctx.restore();
+}
+function drawBoxes(){
+  for(let i=0;i<G.boxes.length;i++){
+    const b=G.boxes[i],p=boxPos(i);
+    let sc=1,al=1,dy=0;
+    if(b.pop){const k=b.pop.t/b.pop.dur;sc=1+0.22*Math.sin(Math.PI*Math.min(1,k*1.4));al=1-Math.max(0,(k-0.55)/0.45);}
+    if(b.slide){const k=easeOut(b.slide.t/b.slide.dur);dy=-(1-k)*(L.box.h+26*S);al=Math.min(1,k*2.2);}
+    if(b.color<0&&!b.pop){
+      ctx.save();ctx.globalAlpha=0.42;
+      drawBoxAt(b,i,p.x,p.y+dy,p.w,p.h,sc,al);ctx.restore();
+    } else drawBoxAt(b,i,p.x,p.y+dy,p.w,p.h,sc,al);
+  }
+  // 下一批盒子预览
+  const left=G.queue.length-G.qi;
+  const n=Math.min(4,left);
+  ctx.save();
+  ctx.font='700 '+(9*S)+'px system-ui,-apple-system,sans-serif';
+  ctx.textAlign='center';ctx.fillStyle='#9aa8ba';
+  ctx.fillText('待上场',L.box.qx,L.boxRow.y+9*S);
+  for(let i=0;i<n;i++){
+    const r=7.5*S,y=L.boxRow.y+22*S+i*(r*2+6*S);
+    drawScrew(L.box.qx,y,r,G.queue[G.qi+i],0);
+  }
+  if(left>4){ctx.fillStyle='#9aa8ba';ctx.font='700 '+(9*S)+'px system-ui';
+    ctx.fillText('+'+(left-4),L.box.qx,L.boxRow.y+22*S+4*(15*S+6*S)-2*S);}
+  ctx.restore();
+}
+function drawTemp(){
+  const t=tempGeom();
+  ctx.save();
+  if(G.tempShake){const k=1-G.tempShake.t/G.tempShake.dur;ctx.translate(Math.sin(G.tempShake.t*52)*6.5*S*k,0);}
+  const x0=t.x0-t.r-8*S, wid=(G.slots-1)*(t.r*2+t.gap)+t.r*2+16*S;
+  let free=0; for(const x of G.temp) if(!x) free++;
+  if(free<=1){                                   // 只剩一格 -> 再放一颗就失败
+    const pu=0.5+0.5*Math.sin(performance.now()/170);
+    ctx.fillStyle='rgba(242,69,61,'+(0.28+0.24*pu).toFixed(3)+')';
+  } else ctx.fillStyle='rgba(205,214,226,.55)';
+  rrPath(x0,t.y-t.r-7*S,wid,t.r*2+14*S,t.r+7*S);ctx.fill();
+  for(let i=0;i<G.slots;i++){
+    const p=tempPos(i),s=G.temp[i];
+    drawHole(p.x,p.y,p.r);
+    if(s&&s.state==='temp') drawScrew(p.x,p.y,p.r,s.color,s.rot);
+  }
+  ctx.restore();
+}
+
+/* ===================== 绘制：顶栏 / 工具 / 背景 ===================== */
+function drawBG(){
+  const g=ctx.createLinearGradient(0,L.bar.y,0,H);
+  g.addColorStop(0,'#cdeafb');g.addColorStop(1,'#9fd3f2');
+  ctx.fillStyle=g;ctx.fillRect(0,0,W,H);
+  const rg=ctx.createRadialGradient(W*0.5,L.board.y+L.board.h*0.42,10,W*0.5,L.board.y+L.board.h*0.42,W*0.85);
+  rg.addColorStop(0,'rgba(255,255,255,.45)');rg.addColorStop(1,'rgba(255,255,255,0)');
+  ctx.fillStyle=rg;ctx.fillRect(0,L.bar.y,W,H-L.bar.y);
+  ctx.fillStyle='#ffffff';
+  rrPath(-20,-40,W+40,L.bar.y+40,18*S);ctx.fill();
+  const done=G.screws.filter(s=>s.state==='gone').length;
+  const frac=G.total?done/G.total:0;
+  ctx.fillStyle='#dfe5ee';rrPath(L.pad,L.bar.y,W-L.pad*2,L.bar.h,L.bar.h/2);ctx.fill();
+  if(frac>0){const gg=ctx.createLinearGradient(L.pad,0,W-L.pad,0);
+    gg.addColorStop(0,'#7fe06a');gg.addColorStop(1,'#35b84a');ctx.fillStyle=gg;
+    rrPath(L.pad,L.bar.y,Math.max(L.bar.h,(W-L.pad*2)*frac),L.bar.h,L.bar.h/2);ctx.fill();}
+}
+function drawTop(){
+  const t=topRects();
+  ctx.save();
+  ctx.fillStyle='#8fa0b5';ctx.beginPath();ctx.arc(t.menu.x,t.menu.y+2*S,t.menu.r,0,6.2832);ctx.fill();
+  ctx.fillStyle='#5b9bf0';ctx.beginPath();ctx.arc(t.menu.x,t.menu.y,t.menu.r,0,6.2832);ctx.fill();
+  ctx.fillStyle='#fff';
+  rrPath(t.menu.x-6*S,t.menu.y-7*S,4.5*S,14*S,2*S);ctx.fill();
+  rrPath(t.menu.x+1.5*S,t.menu.y-7*S,4.5*S,14*S,2*S);ctx.fill();
+  ctx.fillStyle=G.sound?'#5b9bf0':'#b6c2d1';ctx.beginPath();ctx.arc(t.sound.x,t.sound.y,t.sound.r,0,6.2832);ctx.fill();
+  ctx.fillStyle='#fff';ctx.beginPath();
+  ctx.moveTo(t.sound.x-6*S,t.sound.y-3*S);ctx.lineTo(t.sound.x-2.5*S,t.sound.y-3*S);
+  ctx.lineTo(t.sound.x+1.5*S,t.sound.y-7*S);ctx.lineTo(t.sound.x+1.5*S,t.sound.y+7*S);
+  ctx.lineTo(t.sound.x-2.5*S,t.sound.y+3*S);ctx.lineTo(t.sound.x-6*S,t.sound.y+3*S);ctx.closePath();ctx.fill();
+  if(G.sound){ctx.strokeStyle='#fff';ctx.lineWidth=1.8*S;ctx.beginPath();
+    ctx.arc(t.sound.x+2*S,t.sound.y,5.5*S,-0.9,0.9);ctx.stroke();}
+  else{ctx.strokeStyle='#fff';ctx.lineWidth=2*S;ctx.beginPath();
+    ctx.moveTo(t.sound.x+3.5*S,t.sound.y-4*S);ctx.lineTo(t.sound.x+8.5*S,t.sound.y+4*S);
+    ctx.moveTo(t.sound.x+8.5*S,t.sound.y-4*S);ctx.lineTo(t.sound.x+3.5*S,t.sound.y+4*S);ctx.stroke();}
+  const label='第 '+G.level+' 关'+(G.stars?'  '+'★'.repeat(G.stars)+'☆'.repeat(3-G.stars):'');
+  ctx.font='800 '+(15*S)+'px system-ui,-apple-system,"PingFang SC",sans-serif';
+  const tw=ctx.measureText(label).width+26*S;
+  ctx.fillStyle='#4a5568';rrPath(W/2-tw/2,t.menu.y-13*S,tw,26*S,13*S);ctx.fill();
+  ctx.fillStyle='#fff';ctx.textAlign='center';ctx.textBaseline='middle';
+  ctx.fillText(label,W/2,t.menu.y+0.5*S);
+  ctx.restore();
+}
+function drawTools(){
+  const rs=toolRects();
+  const info={undo:{t:'撤销',i:'↺',on:G.history.length>0,n:null},
+              slot:{t:'加孔位',i:'＋',on:G.addSlotLeft>0,n:G.addSlotLeft},
+              retry:{t:'重玩',i:'⟳',on:true,n:null}};
+  ctx.save();
+  for(const r of rs){
+    const d=info[r.id];
+    const c1=d.on?'#62b4ff':'#c4cfdb', c2=d.on?'#2f7de0':'#a3b1c1';
+    ctx.fillStyle=d.on?'#2461b0':'#8d9bab';rrPath(r.x,r.y+4*S,r.w,r.h-2*S,14*S);ctx.fill();
+    const g=ctx.createLinearGradient(0,r.y,0,r.y+r.h);g.addColorStop(0,c1);g.addColorStop(1,c2);
+    ctx.fillStyle=g;rrPath(r.x,r.y,r.w,r.h-2*S,14*S);ctx.fill();
+    ctx.fillStyle='rgba(255,255,255,.28)';rrPath(r.x+5*S,r.y+4*S,r.w-10*S,(r.h-2*S)*0.36,9*S);ctx.fill();
+    ctx.textAlign='center';ctx.textBaseline='middle';ctx.fillStyle='#fff';
+    ctx.font='800 '+(18*S)+'px system-ui,-apple-system,sans-serif';
+    ctx.fillText(d.i,r.x+r.w/2,r.y+r.h*0.32);
+    ctx.font='800 '+(12*S)+'px system-ui,-apple-system,"PingFang SC",sans-serif';
+    ctx.fillText(d.t,r.x+r.w/2,r.y+r.h*0.70);
+    if(d.n!=null){
+      ctx.fillStyle=d.n>0?'#f2453d':'#9aa7b6';
+      ctx.beginPath();ctx.arc(r.x+r.w-8*S,r.y+2*S,9*S,0,6.2832);ctx.fill();
+      ctx.fillStyle='#fff';ctx.font='800 '+(11*S)+'px system-ui,sans-serif';
+      ctx.fillText(d.n,r.x+r.w-8*S,r.y+2.5*S);
+    }
+  }
+  ctx.restore();
+}
+function drawFlying(){
+  for(const s of G.screws){
+    if(!s.fly) continue;
+    const a=s.fly,k=easeIO(Math.min(1,a.t/a.dur)),d=a.to();
+    const x=lerp(a.x0,d.x,k), y=lerp(a.y0,d.y,k)-Math.sin(k*Math.PI)*46*S;
+    const r=lerp(a.r0,d.r,k)*(1+0.25*Math.sin(k*Math.PI));
+    drawScrew(x,y,r,s.color,s.rot+k*3.6);
+  }
+}
+function drawSparks(){
+  for(const p of G.sparks){
+    ctx.save();ctx.globalAlpha=clamp(p.life/p.max,0,1);
+    ctx.fillStyle=p.c;ctx.beginPath();ctx.arc(p.x,p.y,p.r,0,6.2832);ctx.fill();ctx.restore();
+  }
+}
+
+/* ===================== 动画 / 计时 ===================== */
+function anim(obj,key,dur,end){const a={obj,key,t:0,dur,end};obj[key]=a;G.anims.push(a);return a;}
+function timer(d,fn){G.timers.push({t:d,fn});}
+function busy(){return G.anims.length>0||G.timers.length>0;}
+function sparkAt(x,y,color,n){
+  for(let i=0;i<(n||14);i++){const a=rnd(0,6.2832),v=rnd(60,260)*S;
+    G.sparks.push({x,y,vx:Math.cos(a)*v,vy:Math.sin(a)*v-120*S,r:rnd(2,4.5)*S,c:color,life:rnd(.4,.8),max:.8});}
+}
+function burst(){
+  for(let i=0;i<70;i++){
+    G.sparks.push({x:rnd(0,W),y:rnd(L.bar.y,H*0.55),vx:rnd(-160,160)*S,vy:rnd(-420,-120)*S,
+      r:rnd(2.5,6)*S,c:pick(SC),life:rnd(.7,1.4),max:1.4});
+  }
+}
+function tick(dt){
+  for(let i=G.anims.length-1;i>=0;i--){const a=G.anims[i];a.t+=dt;
+    if(a.t>=a.dur){G.anims.splice(i,1);if(a.obj[a.key]===a)a.obj[a.key]=null;if(a.end)a.end();}}
+  for(let i=G.timers.length-1;i>=0;i--){const t=G.timers[i];t.t-=dt;if(t.t<=0){G.timers.splice(i,1);t.fn();}}
+  for(let i=G.sparks.length-1;i>=0;i--){const p=G.sparks[i];
+    p.life-=dt;p.x+=p.vx*dt;p.y+=p.vy*dt;p.vy+=1100*S*dt;if(p.life<=0)G.sparks.splice(i,1);}
+  if(G.hintT>0)G.hintT-=dt;
+  if(G.pendingCheck&&!busy()){G.pendingCheck=false;settle();}
+}
+
+/* ===================== 核心操作 ===================== */
+function topBlocker(s){const pz=G.plates[s.pid].z,R=G.gen.R;let best=null;
+  for(const q of G.plates){if(q.fallen||q.z<=pz)continue;if(plateSD(q,s.x,s.y)<R&&(!best||q.z>best.z))best=q;}
+  return best;}
+function matchBox(color){
+  let best=null;
+  for(const b of G.boxes){ if(b.color!==color||b.pop||b.items.length>=3)continue;
+    if(!best||b.items.length>best.items.length)best=b; }   // 同色优先填最满的盒子
+  return best;
+}
+function takeScrew(s){
+  const box=matchBox(s.color);
+  let slot=-1;
+  if(!box){ slot=G.temp.indexOf(null);
+    if(slot<0){SFX.err();toast('孔位满了，先撤销或加孔位');shakeTemp();return;} }
+  G.history.push(snapshot());
+  if(G.history.length>200)G.history.shift();
+  const t=bt(), from=g2s(s.x,s.y), r0=G.gen.R*t.s;
+  s.state='moving';
+  if(box){ box.items.push(s); s.box=box;
+    const bi=G.boxes.indexOf(box), k=box.items.length-1;
+    const a=anim(s,'fly',0.34,()=>land(s));a.x0=from.x;a.y0=from.y;a.r0=r0;a.to=()=>boxHole(bi,k);
+  }else{ G.temp[slot]=s; s.slot=slot;
+    const a=anim(s,'fly',0.32,()=>land(s));a.x0=from.x;a.y0=from.y;a.r0=r0;a.to=()=>tempPos(slot); }
+  const p=G.plates[s.pid]; p.n--; G.moves++; SFX.pick();
+  if(p.n<=0){ p.fallen=true; const fa=anim(p,'fall',0.5); fa.dir=rnd(-1,1); timer(0.08,SFX.fall); }
+  G.pendingCheck=true;
+}
+function land(s){
+  s.state=s.box?'box':'temp'; SFX.land();
+  if(s.box){const b=s.box;
+    if(b.items.length>=3&&b.items.every(it=>it.state==='box')) completeBox(b);}
+  G.pendingCheck=true;
+}
+function completeBox(b){
+  const i=G.boxes.indexOf(b); if(i<0)return;
+  SFX.full();
+  const p=boxPos(i); sparkAt(p.x+p.w/2,p.y+p.h/2,SC[b.color],16);
+  anim(b,'pop',0.42,()=>{
+    b.items.forEach(it=>it.state='gone');
+    const nb=mkBox(G.qi<G.queue.length?G.queue[G.qi++]:-1);
+    G.boxes[i]=nb; anim(nb,'slide',0.34);
+    timer(0.08,()=>{flushTemp();G.pendingCheck=true;});
+    G.pendingCheck=true;
+  });
+}
+function flushTemp(){
+  let d=0;
+  for(let i=0;i<G.slots;i++){
+    const s=G.temp[i]; if(!s||s.state!=='temp')continue;
+    const b=matchBox(s.color); if(!b)continue;
+    const from=tempPos(i);
+    G.temp[i]=null; s.slot=-1; s.box=b; b.items.push(s); s.state='moving';
+    const bi=G.boxes.indexOf(b), k=b.items.length-1;
+    const a=anim(s,'fly',0.3,()=>land(s));
+    a.x0=from.x;a.y0=from.y;a.r0=from.r;a.to=()=>boxHole(bi,k);a.t=-d; d+=0.09;
+  }
+}
+function shakeTemp(){anim(G,'tempShake',0.32);}
+function settle(){
+  if(G.status!=='play')return;
+  if(G.screws.every(s=>s.state==='gone')){win();return;}
+  const boardLeft=G.screws.some(s=>s.state==='board');
+  if(!boardLeft){endgame();return;}
+  if(G.temp.every(x=>x!==null)) fail();       // 孔位一被占满就算失败
+}
+function endgame(){            // 盘面清空后自动收尾：把剩余螺丝依次装箱
+  flushTemp();
+  if(busy()){G.pendingCheck=true;return;}
+  if(!G.temp.some(Boolean)){win();return;}
+  const idx=G.boxes.findIndex(b=>b.items.length===0&&!b.pop);
+  if(idx>=0&&G.qi<G.queue.length){
+    const nb=mkBox(G.queue[G.qi++]);G.boxes[idx]=nb;anim(nb,'slide',0.3);
+    timer(0.12,()=>{flushTemp();G.pendingCheck=true;});
+  }else{
+    G.temp.forEach((s,i)=>{if(s){s.state='gone';G.temp[i]=null;}});
+    win();
+  }
+}
+
+/* ===================== 存档 / 撤销 ===================== */
+function snapshot(){
+  return{screws:G.screws.map(s=>({st:s.state==='moving'?(s.box?'box':'temp'):s.state,sl:s.slot,
+          bx:s.box?G.boxes.indexOf(s.box):-1})),
+    plates:G.plates.map(p=>({f:p.fallen,n:p.n})),
+    boxes:G.boxes.map(b=>({c:b.color,it:b.items.map(s=>s.id)})),
+    temp:G.temp.map(s=>s?s.id:-1),qi:G.qi,slots:G.slots,add:G.addSlotLeft,moves:G.moves};
+}
+function restore(sn){
+  G.anims.length=0;G.timers.length=0;G.sparks.length=0;
+  G.slots=sn.slots;G.addSlotLeft=sn.add;G.qi=sn.qi;G.moves=sn.moves;
+  G.boxes=sn.boxes.map(b=>mkBox(b.c));
+  G.screws.forEach((s,i)=>{const d=sn.screws[i];s.state=d.st;s.slot=d.sl;s.box=null;s.fly=null;});
+  sn.boxes.forEach((b,i)=>b.it.forEach(id=>{const s=G.screws[id];G.boxes[i].items.push(s);s.box=G.boxes[i];}));
+  G.temp=sn.temp.map(id=>id<0?null:G.screws[id]);
+  G.plates.forEach((p,i)=>{p.fallen=sn.plates[i].f;p.n=sn.plates[i].n;p.fall=null;p.shake=null;});
+  G.tempShake=null;G.status='play';hidePanel();
+  G.boxes.forEach(b=>{if(b.items.length>=3&&b.items.every(it=>it.state==='box'))completeBox(b);});
+  G.pendingCheck=true;
+}
+function save(){try{localStorage.setItem('screwpuzzle',JSON.stringify({level:G.level,sound:G.sound}));}catch(e){}}
+function load(){try{const d=JSON.parse(localStorage.getItem('screwpuzzle')||'{}');
+  if(d.level)G.level=clamp(d.level|0,1,9999); if(d.sound!=null)G.sound=!!d.sound;}catch(e){}}
+
+/* ===================== 结算 / 面板 ===================== */
+function showPanel(h){panelEl.innerHTML=h;overlay.classList.add('on');}
+function hidePanel(){overlay.classList.remove('on');}
+let toastT=null;
+function toast(m){toastEl.textContent=m;toastEl.classList.add('on');
+  clearTimeout(toastT);toastT=setTimeout(()=>toastEl.classList.remove('on'),1300);}
+function win(){
+  if(G.status==='win')return;
+  G.status='win';SFX.win();burst();
+  G.level++;save();
+  timer(0.6,()=>showPanel(
+    '<div class="big">🎉</div><h2>第 '+(G.level-1)+' 关完成</h2>'+
+    '<p>用了 '+G.moves+' 步 · 下一关：第 '+G.level+' 关</p>'+
+    '<button class="btn green" data-act="next">下一关</button>'+
+    '<button class="btn gray" data-act="replay">再玩一次这关</button>'));
+}
+function fail(){
+  if(G.status!=='play')return;
+  G.status='fail';SFX.err();
+  showPanel('<div class="big">💥</div><h2>失败：孔位满了</h2>'+
+    '<p>上方孔位一被占满就算失败。这一关<b>一定有解</b>（生成时已验证过通关线），是刚才某几步把路走死了。</p>'+
+    '<button class="btn green" data-act="rewind">回退到还能通关的一步</button>'+
+    '<button class="btn" data-act="undo">只撤销一步</button>'+
+    '<button class="btn" data-act="slot">加一个孔位（剩 '+G.addSlotLeft+' 次）</button>'+
+    '<button class="btn gray" data-act="retry">重玩本关</button>');
+}
+function jumpMenu(){
+  G.status='paused';
+  showPanel('<h2>跳到指定关卡</h2><p>当前第 '+G.level+' 关 · 可选 1 - 9999</p>'+
+    '<input id="lvInput" type="number" inputmode="numeric" min="1" max="9999" value="'+G.level+'">'+
+    '<div class="row">'+
+      '<button class="btn gray" data-act="lvAdj" data-d="-10">-10</button>'+
+      '<button class="btn gray" data-act="lvAdj" data-d="-1">-1</button>'+
+      '<button class="btn gray" data-act="lvAdj" data-d="1">+1</button>'+
+      '<button class="btn gray" data-act="lvAdj" data-d="10">+10</button>'+
+    '</div>'+
+    '<button class="btn green" data-act="jumpGo">前往</button>'+
+    '<button class="btn gray" data-act="resume">返回</button>');
+}
+function pauseMenu(){
+  if(G.status!=='play')return;
+  G.status='paused';
+  showPanel('<h2>暂停</h2><p>第 '+G.level+' 关 · 已用 '+G.moves+' 步</p>'+
+    '<button class="btn green" data-act="resume">继续游戏</button>'+
+    '<button class="btn" data-act="sound">音效：'+(G.sound?'开':'关')+'</button>'+
+    '<button class="btn" data-act="rewind">回退到还能通关的一步</button>'+
+    '<button class="btn gray" data-act="retry">重玩本关</button>'+
+    '<button class="btn gray" data-act="jump">跳到指定关卡</button>');
+}
+panelEl.addEventListener('click',e=>{
+  const b=e.target.closest('[data-act]');if(!b)return;
+  audio();
+  const a=b.dataset.act;
+  if(a==='next'){hidePanel();newLevel(G.level);G.hintT=0;}
+  else if(a==='replay'){G.level--;save();hidePanel();newLevel(G.level);}
+  else if(a==='resume'){G.status='play';hidePanel();}
+  else if(a==='retry'){hidePanel();restore(G.initial);G.history.length=0;}
+  else if(a==='undo'){doUndo();}
+  else if(a==='slot'){addSlot();}
+  else if(a==='rewind'){rewindToSolvable();}
+  else if(a==='sound'){G.sound=!G.sound;save();pauseMenu();}
+  else if(a==='jump'){jumpMenu();}
+  else if(a==='lvAdj'){const el=document.getElementById('lvInput');
+    if(el)el.value=clamp((parseInt(el.value,10)||1)+(parseInt(b.dataset.d,10)||0),1,9999);}
+  else if(a==='jumpGo'){const el=document.getElementById('lvInput');
+    const n=clamp(parseInt(el&&el.value,10)||1,1,9999);
+    hidePanel();G.level=n;save();newLevel(n);G.hintT=n<=2?6:0;
+    toast('第 '+n+' 关');}
+});
+function doUndo(){
+  if(!G.history.length){toast('没有可撤销的步骤');return;}
+  restore(G.history.pop());hidePanel();SFX.land();
+}
+function addSlot(){
+  if(G.addSlotLeft<=0){toast('本关加孔位次数用完了');return;}
+  G.addSlotLeft--;G.slots++;G.temp.push(null);
+  if(G.status==='fail'){G.status='play';hidePanel();}
+  layoutAll();toast('增加了 1 个孔位');SFX.full();
+  timer(0.05,()=>{flushTemp();G.pendingCheck=true;});
+}
+
+/* ===================== 输入 ===================== */
+function onTap(px,py){
+  audio();
+  const t=topRects();
+  if(Math.hypot(px-t.menu.x,py-t.menu.y)<t.menu.r*1.5){pauseMenu();return;}
+  if(Math.hypot(px-t.sound.x,py-t.sound.y)<t.sound.r*1.5){G.sound=!G.sound;save();return;}
+  if(G.status!=='play')return;
+  for(const r of toolRects())
+    if(px>=r.x&&px<=r.x+r.w&&py>=r.y-6*S&&py<=r.y+r.h+6*S){
+      if(r.id==='undo')doUndo(); else if(r.id==='slot')addSlot();
+      else {restore(G.initial);G.history.length=0;toast('已重玩本关');}
+      return;}
+  if(py<L.bar.y+L.bar.h)return;
+  const tr=bt(),gx=(px-tr.tx)/tr.s,gy=(py-tr.ty)/tr.s,R=G.gen.R;
+  let best=null,bd=1e9,blk=null,bkd=1e9;
+  for(const s of G.screws){
+    if(s.state!=='board')continue;
+    const d=Math.hypot(s.x-gx,s.y-gy); if(d>R*1.8)continue;
+    if(isBlocked(s)){if(d<bkd){bkd=d;blk=s;}} else if(d<bd){bd=d;best=s;}
+  }
+  if(best){G.hintT=0;takeScrew(best);return;}
+  if(blk){const p=topBlocker(blk);if(p&&!p.shake)anim(p,'shake',0.34);SFX.err();toast('这颗被上层板块压住了');}
+}
+cv.addEventListener('pointerdown',e=>{e.preventDefault();
+  const r=cv.getBoundingClientRect();onTap(e.clientX-r.left,e.clientY-r.top);},{passive:false});
+document.addEventListener('touchmove',e=>{if(e.cancelable)e.preventDefault();},{passive:false});
+document.addEventListener('gesturestart',e=>e.preventDefault());
+window.addEventListener('resize',()=>{layoutAll();});
+window.addEventListener('orientationchange',()=>setTimeout(layoutAll,220));
+
+/* ===================== 主循环 ===================== */
+function drawHint(){
+  if(!(G.hintT>0))return;
+  const a=clamp(G.hintT/1.2,0,1);
+  ctx.save();ctx.globalAlpha=a;
+  ctx.font='700 '+(13.5*S)+'px system-ui,-apple-system,"PingFang SC",sans-serif';
+  ctx.textAlign='center';ctx.textBaseline='middle';
+  const txt='点螺丝 → 装进同色盒子 · 下方孔位满了就输';
+  const w=ctx.measureText(txt).width+28*S;
+  ctx.fillStyle='rgba(22,38,64,.78)';
+  rrPath(W/2-w/2,L.board.y+L.board.h-30*S,w,26*S,13*S);ctx.fill();
+  ctx.fillStyle='#fff';ctx.fillText(txt,W/2,L.board.y+L.board.h-17*S);
+  ctx.restore();
+}
+let lastT=0;
+function frame(ts){
+  const dt=lastT?Math.min(0.05,(ts-lastT)/1000):0; lastT=ts;
+  if(G.status!=='paused')tick(dt);
+  drawBG();drawBoard();drawHint();drawBoxes();drawTemp();drawTop();drawTools();drawFlying();drawSparks();
+  requestAnimationFrame(frame);
+}
+function boot(){
+  load();
+  const m=/(?:[?#&])(?:lv|level)=(\d+)/.exec(location.search+location.hash);
+  if(m) G.level=clamp(parseInt(m[1],10)||1,1,9999);
+  layoutAll();newLevel(G.level);
+  G.hintT=G.level<=2?6:0;
+  requestAnimationFrame(frame);
+}
+boot();
+// 只在真正托管的页面上注册离线缓存（本地文件 / artifact 里自动跳过）
+if(document.querySelector('link[rel="manifest"]')&&'serviceWorker' in navigator&&/^https?:$/.test(location.protocol)){
+  window.addEventListener('load',()=>{navigator.serviceWorker.register('sw.js').catch(()=>{});});
+}
+</script>
+</body>
+</html>
