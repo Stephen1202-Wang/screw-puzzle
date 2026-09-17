@@ -84,6 +84,15 @@ const SC =['#f2453d','#57c22b','#2f79ef','#9b4fe0','#f5821f','#17bfd4','#ff5b9e'
            '#f6c522','#0f8a52','#8b5a2b','#b8d117','#1f3fa8','#8e1b1b','#c2185b'];
 // 螺丝头槽形状：颜色多了以后靠形状二次区分（相近色号一定不同形）
 const GLY=['X','+','S','X','D','O','O','=','S','-','Y','Y','=','T'];
+// 色系分族：同族颜色太像，选色板时优先每族只取一个
+const FAM=[[0,12],[6,13],[4,9],[7,10],[1,8],[5],[2,11],[3]];
+function pickPalette(k){
+  const fams=shuffle(FAM.map(f=>shuffle(f.slice())));
+  const out=[];
+  for(const f of fams){ if(out.length>=k) break; out.push(f[0]); }
+  for(const c of shuffle(fams.flatMap(f=>f.slice(1)))){ if(out.length>=k) break; out.push(c); }
+  return shuffle(out);
+}
 const PC =['#ff9ed3','#b7a3ff','#8fd8f6','#8ae7c6','#ffb492','#ff9f9f','#cbe98d','#ffd98a','#9fc6ff'];
 
 /* ===================== 状态 ===================== */
@@ -245,7 +254,7 @@ function tryGen(n,P){
   const seq=peelOrder(plates,screws,R); if(!seq) return null;
   // 沿合法顺序每 3 个一组染色 —— 保证「照着顺序拆」一定通得过
   // 每色数量必然是 3 的倍数；各色尽量平均分配
-  const pool=shuffle(SC.map((c,i)=>i)).slice(0,P.colors);
+  const pool=pickPalette(P.colors);
   const nG=Math.floor(seq.length/3);
   const queue=[];
   for(let g=0;g<nG;g++){
