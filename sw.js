@@ -1,9 +1,13 @@
 /* 离线缓存：首次打开后断网也能玩。改版时把 CACHE 版本号 +1 */
-const CACHE = 'screw-puzzle-v2';
+const CACHE = 'screw-puzzle-v3';
 const ASSETS = ['./','./index.html','./manifest.webmanifest',
                 './icon-192.png','./icon-512.png','./icon-512-maskable.png'];
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
+  // 用 cache:'reload' 绕过浏览器 HTTP 缓存，否则会把旧版 HTML 烤进新缓存
+  e.waitUntil(caches.open(CACHE)
+    .then(c => Promise.all(ASSETS.map(u =>
+      fetch(u, { cache: 'reload' }).then(r => { if (r.ok) return c.put(u, r); }))))
+    .then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys()
