@@ -139,7 +139,7 @@ function levelParams(n){
   const plates=clamp(3+Math.round((n-1)/2.2)+wave,3,16);
   // 颜色数恒大于盒子数(3)：3色以下没有任何压力
   const colors = n<=2?4 : n<=5?5 : n<=10?6 : n<=25?8 : n<=50?10 : clamp(11+Math.floor((n-50)/25),11,14);
-  const slots  = n<=2?7 : n<=5?6 : n<=25?5 : 4;
+  const slots  = 5;                                   // 固定 5 个临时孔位（满即失败 => 有效容量 4）
   const maxScrew = n<=4?3 : (n<=10?4:5);
   const target = clamp(Math.round(9+n*1.15)+wave*3,12,45);  // 目标螺丝总数（>=12 才凑得出 4 组 4 色）
   // 难度闸门：允许 bot 通关率的上限（0 = 笨策略必须全败）
