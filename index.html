@@ -134,18 +134,25 @@ function isBlocked(s){ const pz=G.plates[s.pid].z, R=G.gen.R;
     if(q.fallen||q.z<=pz) continue; if(plateSD(q,s.x,s.y)<R) return true;} return false; }
 
 /* ===================== 关卡参数 ===================== */
+const MAX_LEVEL=999;
 function levelParams(n){
+  n=clamp(Math.floor(Number(n))||1,1,MAX_LEVEL);
+  const t=(n-1)/(MAX_LEVEL-1);                          // 全程进度 0..1
   const wave=[0,0,1,0,2,0,1,2,1,0][(n-1)%10];          // 难度波浪曲线
-  const plates=clamp(3+Math.round((n-1)/2.2)+wave,3,16);
-  // 颜色数恒大于盒子数(3)：3色以下没有任何压力
-  const colors = n<=2?4 : n<=5?5 : n<=10?6 : n<=25?8 : n<=50?10 : clamp(11+Math.floor((n-50)/25),11,14);
+  // 层数是后期难度的主轴：第 1 关 2 层 -> 第 999 关 8 层，一路涨到最后
+  const layers=clamp(Math.round(2+6.2*Math.pow(t,0.55))+(wave===2&&n>20?1:0),2,8);
+  const perLayer = layers<=2?3 : 4;                    // 每层网格的格数
+  // 颜色数恒大于盒子数(3)；第 50 关后放慢，到约第 410 关才封顶 14 色
+  const colors = n<=2?4 : n<=5?5 : n<=10?6 : n<=25?8 : n<=50?10 : clamp(11+Math.floor((n-50)/120),11,14);
   const slots  = 5;                                   // 固定 5 个临时孔位（满即失败 => 有效容量 4）
-  const maxScrew = n<=4?3 : (n<=10?4:5);
-  const target = clamp(Math.round(9+n*1.15)+wave*3,12,45);  // 目标螺丝总数（>=12 才凑得出 4 组 4 色）
+  const maxScrew = n<=4?3 : n<=10?4 : layers<=5?5 : 6;
+  // 目标螺丝总数：前 31 关快速涨到 45（>=12 才凑得出 4 组 4 色），之后一路慢慢涨到第 999 关的 60 颗
+  const target = n<=31 ? clamp(Math.round(9+n*1.15)+wave*3,12,45)
+                       : Math.round(45+15*(n-31)/(MAX_LEVEL-31))+wave*2;
   // 难度闸门：允许 bot 通关率的上限（0 = 笨策略必须全败）
   const botMax = n<=3?1 : n<=6?0.5 : n<=12?0.2 : 0;
   const delayMax = n<=12?1 : 2;                       // 最多推迟几个早期盒子
-  return {plates,colors,slots,maxScrew,target,botMax,delayMax,wave};
+  return {layers,perLayer,colors,slots,maxScrew,target,botMax,delayMax,wave};
 }
 
 /* ===================== 关卡生成 ===================== */
@@ -153,34 +160,43 @@ function tryGen(n,P){
   const bw=L.board.w, bh=L.board.h;
   const gw=1000, gh=1000*bh/bw;
   const R=clamp(13000/bw,24,42);
-  const f=clamp(1.20-P.plates*0.034,0.74,1.08);
   const pal=shuffle(PC.slice());
   const plates=[];
   const asp=gh/gw;
-  const baseW=R*9.6*f, baseH=R*7.9*f;
-  const K=0.52;                                          // 网格比板块小 -> 必然层叠（越小越深）
+  const baseW=R*9.4, baseH=R*7.7;
+  const K=0.60;                                          // 同层格距 / 板块尺寸（<1 => 同层相邻板块也互相搭边）
   const TA=1.14;                                         // 整簇目标长宽比（接近正方形，铺满宽度）
-  let cols=1,rows=P.plates,bd=1e9;                       // 选行列数，使整簇长宽比贴近屏幕
-  for(let c=1;c<=P.plates;c++){
-    const r=Math.ceil(P.plates/c);
+  let cols=1,rows=P.perLayer,bd=1e9;                     // 每层网格的行列数
+  for(let c=1;c<=P.perLayer;c++){
+    const r=Math.ceil(P.perLayer/c);
     const d=Math.abs(Math.log((baseH*(r*K+1))/(baseW*(c*K+1))/TA));
     if(d<bd){bd=d;cols=c;rows=r;}
   }
-  const spanW=cols*baseW*K, spanH=rows*baseH*K;
-  const cwid=spanW/cols, chei=spanH/rows;
-  const gx0=(gw-spanW)/2, gy0=(gh-spanH)/2;
-  const cells=shuffle(Array.from({length:rows*cols},(_,k)=>k));
-  for(let i=0;i<P.plates;i++){
-    const cell=cells[i], ccol=cell%cols, crow=Math.floor(cell/cols);
-    const pill=Math.random()<0.34;
-    let w=baseW*rnd(0.82,1.26), h=baseH*rnd(0.78,1.28);
-    if(pill) h=Math.min(h,w*0.60);
-    const rot=rnd(-0.95,0.95);
-    const co=Math.cos(rot), si=Math.sin(rot);
-    const cx=gx0+(ccol+0.5)*cwid+rnd(-0.24,0.24)*cwid;
-    const cy=gy0+(crow+0.5)*chei+rnd(-0.24,0.24)*chei;
-    plates.push({id:i,z:i,cx,cy,w,h,rot,cos:co,sin:si,r:pill?h/2:rnd(R*0.7,R*1.4),
-      color:pal[i%pal.length],fallen:false,n:0,fall:null,shake:null});
+  const cwid=baseW*K, chei=baseH*K;
+  const gx0=(gw-cols*cwid)/2, gy0=(gh-rows*chei)/2;
+  /* 真正的多层堆叠：每层都铺在同一片区域上，层与层之间错开半格（像砌砖），
+     越往上越稀疏 —— 露出下层的缝隙，也让同一时刻有几层同时可拆。 */
+  let pid=0;
+  for(let layer=0;layer<P.layers;layer++){
+    const fill=P.layers>1?1-0.42*layer/(P.layers-1):1;
+    const sx=((layer&1)?0.5:0)*cwid*(cols>1?1:0.4);
+    const sy=((layer>>1)&1?0.5:0)*chei*(rows>1?1:0.4);
+    const cells=shuffle(Array.from({length:cols*rows},(_,k)=>k));
+    let placed=0;
+    for(const cell of cells){
+      if(placed>0&&Math.random()>fill) continue;
+      const ccol=cell%cols, crow=Math.floor(cell/cols);
+      const pill=Math.random()<0.34;
+      let w=baseW*rnd(0.84,1.22), h=baseH*rnd(0.80,1.24);
+      if(pill) h=Math.min(h,w*0.60);
+      const rot=rnd(-0.95,0.95);
+      const co=Math.cos(rot), si=Math.sin(rot);
+      const cx=gx0+(ccol+0.5)*cwid+sx-cwid*0.25+rnd(-0.22,0.22)*cwid;
+      const cy=gy0+(crow+0.5)*chei+sy-chei*0.25+rnd(-0.22,0.22)*chei;
+      plates.push({id:pid,z:pid,layer,cx,cy,w,h,rot,cos:co,sin:si,r:pill?h/2:rnd(R*0.7,R*1.4),
+        color:pal[pid%pal.length],fallen:false,n:0,fall:null,shake:null});
+      pid++; placed++;
+    }
   }
 
   // 撒螺丝：必须清晰地"完全在本板块内"，且相对上层板块"要么完全被压住、要么完全露出"
@@ -214,7 +230,6 @@ function tryGen(n,P){
     p.n=0;
     const want=clamp(Math.round(Math.sqrt(p.w*p.h)/(R*3.0)),1,P.maxScrew);
     for(let i=0;i<want;i++) tryPlace(p,true);
-    if(p.n===0) return null;
   }
   let g2=0;
   while(screws.length<P.target&&g2++<90){          // 补足到目标数量
@@ -225,6 +240,15 @@ function tryGen(n,P){
     }
     if(!added) break;
   }
+  // 层叠很深时，底层个别板块可能找不到"不擦边"的落点 —— 这种空板直接拿掉，重新编号
+  if(plates.some(p=>p.n===0)){
+    const keep=plates.filter(p=>p.n>0), remap={};
+    keep.forEach((p,i)=>{ remap[p.id]=i; });
+    for(const sc of screws) sc.pid=remap[sc.pid];
+    keep.forEach((p,i)=>{ p.id=i; });
+    plates.length=0; for(const p of keep) plates.push(p);
+  }
+  if(plates.length<2) return null;
   // 螺丝总数补成 3 的倍数（每个盒子 3 格）
   let guard=0;
   while(screws.length%3!==0&&guard++<40){
@@ -378,6 +402,20 @@ const POL_SEARCH=(L,st,acc)=>{
   let best=null,bv=1e9;
   for(const i of acc){ const v=qpos(L,st,L.color[i])+Math.random()*3.2; if(v<bv){ bv=v; best=i; } }
   return best; };
+// 普通玩家：见到能直接进盒子的就在其中随手挑一颗；实在没有才寄存，而且不会去填最后一格
+const POL_CASUAL=(L,st,acc)=>{
+  const fit=[]; for(const i of acc) if(simMatch(st,L.color[i])>=0) fit.push(i);
+  if(fit.length) return fit[Math.floor(Math.random()*fit.length)];
+  const f=tempFree(st); if(!(f>=2||(f>=1&&acc.length===1))) return null;
+  return acc[Math.floor(Math.random()*acc.length)];
+};
+function simCasualWin(L,runs){ let w=0; for(let k=0;k<runs;k++) if(simPlay(L,POL_CASUAL)) w++; return w/runs; }
+/* 难度目标：普通玩家"凭直觉就通关"的概率上限，随关卡号单调下降，第 999 关为 0 */
+function casualMax(n){
+  if(n<=12) return 1;                                  // 教学段不卡
+  const t=(n-1)/(MAX_LEVEL-1);
+  return 0.08+0.22*Math.pow(1-t,1.3);                  // 第 13 关 30% -> 第 999 关 8%（深层下再低就几乎找不到有解的关）
+}
 function simWitness(L,restarts){ for(let k=0;k<restarts;k++) if(simPlay(L,POL_SEARCH)) return k+1; return 0; }
 // 同上，但把找到的那条通关线记下来 —— 作为"这一关确实能通"的证据随关卡一起保存
 function simWitnessLine(L,restarts){
@@ -479,11 +517,24 @@ function qDelay(q,nDelay){                    // 把 1-2 个早期盒子推迟�
   }
   return a;
 }
+function qPartial(q,p,w){                    // 强度连续可调的局部打乱：p=每个位置被换走的概率，w=最远换多远
+  const n=q.length, a=q.slice();
+  for(let i=0;i<n-1;i++){
+    if(Math.random()>=p) continue;
+    const j=Math.min(n-1,i+1+Math.floor(Math.random()*w));
+    const t=a[i]; a[i]=a[j]; a[j]=t;
+  }
+  return a;
+}
 function makeQueue(base,P,k){
-  const m=k%3;
+  /* 浅层：难度要靠打乱队列制造；深层：几何本身已经够难，打得太乱只会无解。
+     实测第 800 关：300 个候选里 ~225 个普通玩家都过不去，但只有 2-11 个有解。
+     所以层越深，越多用温和的、强度连续可调的打乱，让闸门在"难"与"有解"之间挑最难的。 */
+  const m = P.layers>=5 ? [3,2,3,1,3,0][k%6] : k%4;
   if(m===0) return qFullShuffle(base);
   if(m===1) return qMidShuffle(base);
-  return qDelay(base,1+Math.floor(Math.random()*P.delayMax));
+  if(m===2) return qDelay(base,1+Math.floor(Math.random()*P.delayMax));
+  return qPartial(base,rnd(0.15,0.65),2+Math.floor(Math.random()*Math.max(1,base.length/2)));
 }
 // 关内难度剖面：通关线前/后段的孔位占用峰值 + 贪心 bot 能活到第几步
 function simProfile(L,line){
@@ -554,52 +605,85 @@ function simMinSlots(L,restarts){         // 最少要几个临时孔位才有�
   return L.slots; }
 
 function newLevel(n){
-  const P=levelParams(n);
-  const t0=performance.now(), BUDGET=240;
-  let fallback=null, best=null;
+  n=clamp(Math.floor(Number(n))||1,1,MAX_LEVEL);
+  const P=levelParams(n), cMax=casualMax(n);
+  // 层越深，"又难又有解"的排列越稀有 —— 给深层关卡多一点生成时间（最多约 0.38 秒，只在进关时花一次）
+  const t0=performance.now(), BUDGET=240+35*Math.max(0,P.layers-4);
+  let fallback=null, best=null, easy=null;
   for(let geo=0; geo<26; geo++){
+    if(fallback&&performance.now()-t0>BUDGET*0.8) break;   // 已经跑不动第一段了，别再空跑 tryGen
     const cand=tryGen(n,P);
     if(!cand) continue;
     // tryGen 返回的 queue 就是"构造序"：照着拆解顺序装箱，0 个孔位也一定通关 —— 保底可通关
-    if(!fallback) fallback={lv:cand,q:cand.queue.slice(),mn:1,bw:1,line:cand.seq};
+    if(!fallback) fallback={lv:cand,q:cand.queue.slice(),bw:1,cw:1,line:cand.seq};
     if(P.botMax>=1) break;                       // 前几关就用构造序，保持简单
     const L0=simBuild(cand.plates,cand.screws,cand.queue,P.slots,cand.gen.R);
-    const shortlist=[];
-    for(let k=0;k<200;k++){
-      if(performance.now()-t0>BUDGET*0.62) break;
-      const q=makeQueue(cand.queue,P,k);         // 三种策略轮着产候选
+    // 第一段：便宜条件筛出有解的候选
+    const pool=[], loose=[];
+    const tStage=performance.now();
+    // 每个几何有自己的时间片（第 0 个多给一点），而不是都跟全局起点比 —— 否则第 1 个几何起就一轮都跑不了
+    const sliceEnd=Math.min(tStage+BUDGET*(geo===0?0.45:0.3), t0+BUDGET*0.8);
+    for(let k=0;k<900;k++){
+      if(performance.now()>sliceEnd) break;
+      const q=makeQueue(cand.queue,P,k);
       const L={...L0,queue:q};
-      const bw=simBotWin(L,3);                   // 便宜：笨策略先筛
-      if(bw>P.botMax) continue;
-      const line=simWitnessLine(L,260);          // 贵：必须找到一条通关线，否则丢弃
+      const bw=simBotWin(L,3);                   // 笨策略
+      if(bw>P.botMax){
+        // 笨策略能赢 => 必定有解；虽然不够难，但比构造序难得多。池子空的时候留一个 bw 最低的当退路
+        if(!pool.length&&(!easy||bw<easy.bw)){
+          const ln=simWitnessLine(L,30);
+          if(ln) easy={lv:cand,q,L,line:ln,bw,cw:simCasualWin(L,12)};
+        }
+        continue;
+      }
+      // 普通玩家通关率：目标越低，越需要多模拟几局才敢判达标（8 局估不准 5% 级别的概率）
+      const cw=simCasualWin(L,cMax<0.15?24:12);
+      if(cw>cMax){
+        // 不达标的只在"本轮预算过半还一个达标都没有"时才去找解，留作退路
+        if(pool.length||loose.length>=3||performance.now()-tStage<BUDGET*0.15) continue;
+        const line=simWitnessLine(L,90);
+        if(line) loose.push({lv:cand,q,L,line,bw,cw});
+        continue;
+      }
+      const line=simWitnessLine(L,120);          // 达标：必须找到一条通关线，否则丢弃
       if(!line) continue;
-      const pr=simProfile(L,line);
-      const mn=simMinSlots(L,40);
-      const pre=(pr.late-pr.early)*8+pr.gDeath*30+mn*6-bw*30;
-      shortlist.push({lv:cand,q,L,line,pr,mn,bw,pre});
-      if(shortlist.length>=14) break;
+      pool.push({lv:cand,q,L,line,bw,cw});
+      if(pool.length>=8) break;
     }
-    // 第二段：对入围候选实测"前段容错 - 后段容错"，挑弧线最陡的
-    shortlist.sort((a,b)=>b.pre-a.pre);
-    for(const c of shortlist.slice(0,8)){
+    if(!pool.length) for(const c of loose) pool.push(c);
+    // 第二段：瞄准本关的目标难度（而不是一律挑最难的 —— 否则第 11 关就难到顶，后面没有上坡），
+    //        其次挑开局最宽松的
+    const tgt=cMax*0.75;
+    const ok=pool.filter(c=>c.cw<=cMax);
+    const ranked=(ok.length?ok:pool).sort((a,b)=>Math.abs(a.cw-tgt)-Math.abs(b.cw-tgt)).slice(0,5);
+    for(const c of ranked){
       if(performance.now()-t0>BUDGET) break;
-      c.isf=instinctSafeFrac(c.L,c.line);       // 难度从第几成开始
-      c.score=c.isf*200+c.mn*10+c.pre*0.3;
+      c.isf=instinctSafeFrac(c.L,c.line);        // 难度从第几成开始
+      c.score=(c.cw<=cMax?1000:0)+c.isf*120-Math.abs(c.cw-tgt)*400;
       if(!best||c.score>best.score) best=c;
     }
-    if(!best&&shortlist.length) best=shortlist[0];   // 兜底：至少用便宜分最高的
-    if(best||performance.now()-t0>BUDGET) break;
+    // 预算用完、第二段一个都没来得及打分：ranked 里每一项都带验证过的通关线，直接用排第一的
+    if(ranked.length&&(!best||(best.cw>cMax&&ranked[0].cw<=cMax))){
+      best=ranked[0]; best.isf=best.isf||0;
+      if(best.score==null) best.score=(best.cw<=cMax?1000:0)-Math.abs(best.cw-tgt)*400;
+    }
+    if((best&&best.cw<=cMax)||performance.now()-t0>BUDGET) break;
   }
-  const pick=best||fallback;
+  let pick=best||easy||fallback;
+  // 兜底中的兜底：极端情况下 26 次都生成失败，就逐步减层直到能出一关（保证永远有关可玩）
+  for(let lay=P.layers-1; !pick&&lay>=2; lay--){
+    for(let i=0;i<20&&!pick;i++){ const c=tryGen(n,{...P,layers:lay}); if(c) pick={lv:c,q:c.queue.slice(),bw:1,cw:1,line:c.seq}; }
+  }
   G.level=n; G.plates=pick.lv.plates; G.screws=pick.lv.screws; G.gen=pick.lv.gen;
   G.queue=pick.q; G.qi=0; G.slots=P.slots; G.temp=new Array(P.slots).fill(null);
   G.boxes=[]; for(let i=0;i<3;i++) G.boxes.push(mkBox(G.qi<G.queue.length?G.queue[G.qi++]:-1));
   G.anims=[]; G.timers=[]; G.history=[]; G.sparks=[]; G.status='play'; G.moves=0;
   G.addSlotLeft=2; G.total=G.screws.length;
   G.solution=pick.line;                        // 已验证的通关线（保证这一关能通）
-  G.diff={bw:pick.bw,mn:pick.mn,slots:P.slots,fb:!best,isf:pick.isf||0,gen:Math.round(performance.now()-t0)};
-  G.stars=1+(pick.bw===0?1:0)+(pick.mn>=P.slots?1:0);
+  G.diff={bw:pick.bw,cw:pick.cw,cMax,layers:P.layers,fb:!best&&!easy,easy:!best&&!!easy,isf:pick.isf||0,gen:Math.round(performance.now()-t0)};
+  G.stars=pick.cw<=0.08?3:pick.cw<=0.3?2:1;    // 按"普通玩家凭直觉能过的概率"评星
   G.initial=snapshot();
+  G.readyAt=performance.now();
   save();
 }
 function mkBox(color){return {color,items:[],pop:null,slide:null};}
@@ -859,7 +943,7 @@ function drawTop(){
   else{ctx.strokeStyle='#fff';ctx.lineWidth=2*S;ctx.beginPath();
     ctx.moveTo(t.sound.x+3.5*S,t.sound.y-4*S);ctx.lineTo(t.sound.x+8.5*S,t.sound.y+4*S);
     ctx.moveTo(t.sound.x+8.5*S,t.sound.y-4*S);ctx.lineTo(t.sound.x+3.5*S,t.sound.y+4*S);ctx.stroke();}
-  const label='第 '+G.level+' 关'+(G.stars?'  '+'★'.repeat(G.stars)+'☆'.repeat(3-G.stars):'');
+  const label='第 '+G.level+'/'+MAX_LEVEL+' 关'+(G.stars?'  '+'★'.repeat(G.stars)+'☆'.repeat(3-G.stars):'');
   ctx.font='800 '+(15*S)+'px system-ui,-apple-system,"PingFang SC",sans-serif';
   const tw=ctx.measureText(label).width+26*S;
   ctx.fillStyle='#4a5568';rrPath(W/2-tw/2,t.menu.y-13*S,tw,26*S,13*S);ctx.fill();
@@ -1036,7 +1120,7 @@ function restore(sn){
 }
 function save(){try{localStorage.setItem('screwpuzzle',JSON.stringify({level:G.level,sound:G.sound}));}catch(e){}}
 function load(){try{const d=JSON.parse(localStorage.getItem('screwpuzzle')||'{}');
-  if(d.level)G.level=clamp(d.level|0,1,9999); if(d.sound!=null)G.sound=!!d.sound;}catch(e){}}
+  if(d.level)G.level=clamp(d.level|0,1,MAX_LEVEL); if(d.sound!=null)G.sound=!!d.sound;}catch(e){}}
 
 /* ===================== 结算 / 面板 ===================== */
 function showPanel(h){panelEl.innerHTML=h;overlay.classList.add('on');}
@@ -1047,6 +1131,14 @@ function toast(m){toastEl.textContent=m;toastEl.classList.add('on');
 function win(){
   if(G.status==='win')return;
   G.status='win';SFX.win();burst();
+  if(G.level>=MAX_LEVEL){                        // 打通最后一关：停在 999，给个结局面板
+    save();
+    timer(0.6,()=>showPanel('<div class="big">🏆</div><h2>全部 '+MAX_LEVEL+' 关通关！</h2>'+
+      '<p>用了 '+G.moves+' 步拿下最后一关。</p>'+
+      '<button class="btn green" data-act="replayLast">再挑战一次第 '+MAX_LEVEL+' 关</button>'+
+      '<button class="btn gray" data-act="restartAll">从第 1 关重新开始</button>'));
+    return;
+  }
   G.level++;save();
   timer(0.6,()=>showPanel(
     '<div class="big">🎉</div><h2>第 '+(G.level-1)+' 关完成</h2>'+
@@ -1064,10 +1156,17 @@ function fail(){
     '<button class="btn" data-act="slot">加一个孔位（剩 '+G.addSlotLeft+' 次）</button>'+
     '<button class="btn gray" data-act="retry">重玩本关</button>');
 }
+// 深层关卡生成要零点几秒：先把提示画出来再开始算，避免点了按钮画面"卡住没反应"
+function goLevel(n){
+  n=clamp(Math.floor(Number(n))||1,1,MAX_LEVEL);
+  hidePanel(); G.status='paused'; G.level=n; save();
+  toast('正在生成第 '+n+' 关…');
+  setTimeout(()=>{ newLevel(n); G.hintT=n<=2?6:0; },40);
+}
 function jumpMenu(){
   G.status='paused';
-  showPanel('<h2>跳到指定关卡</h2><p>当前第 '+G.level+' 关 · 可选 1 - 9999</p>'+
-    '<input id="lvInput" type="number" inputmode="numeric" min="1" max="9999" value="'+G.level+'">'+
+  showPanel('<h2>跳到指定关卡</h2><p>当前第 '+G.level+' 关 · 可选 1 - '+MAX_LEVEL+'</p>'+
+    '<input id="lvInput" type="number" inputmode="numeric" min="1" max="'+MAX_LEVEL+'" value="'+G.level+'">'+
     '<div class="row">'+
       '<button class="btn gray" data-act="lvAdj" data-d="-10">-10</button>'+
       '<button class="btn gray" data-act="lvAdj" data-d="-1">-1</button>'+
@@ -1091,9 +1190,11 @@ panelEl.addEventListener('click',e=>{
   const b=e.target.closest('[data-act]');if(!b)return;
   audio();
   const a=b.dataset.act;
-  if(a==='next'){hidePanel();newLevel(G.level);G.hintT=0;}
-  else if(a==='replay'){G.level--;save();hidePanel();newLevel(G.level);}
+  if(a==='next'){goLevel(G.level);}
+  else if(a==='replay'){goLevel(G.level-1);}
   else if(a==='resume'){G.status='play';hidePanel();}
+  else if(a==='replayLast'){goLevel(MAX_LEVEL);}
+  else if(a==='restartAll'){goLevel(1);}
   else if(a==='retry'){hidePanel();restore(G.initial);G.history.length=0;}
   else if(a==='undo'){doUndo();}
   else if(a==='slot'){addSlot();}
@@ -1101,11 +1202,9 @@ panelEl.addEventListener('click',e=>{
   else if(a==='sound'){G.sound=!G.sound;save();pauseMenu();}
   else if(a==='jump'){jumpMenu();}
   else if(a==='lvAdj'){const el=document.getElementById('lvInput');
-    if(el)el.value=clamp((parseInt(el.value,10)||1)+(parseInt(b.dataset.d,10)||0),1,9999);}
+    if(el)el.value=clamp((parseInt(el.value,10)||1)+(parseInt(b.dataset.d,10)||0),1,MAX_LEVEL);}
   else if(a==='jumpGo'){const el=document.getElementById('lvInput');
-    const n=clamp(parseInt(el&&el.value,10)||1,1,9999);
-    hidePanel();G.level=n;save();newLevel(n);G.hintT=n<=2?6:0;
-    toast('第 '+n+' 关');}
+    goLevel(parseInt(el&&el.value,10)||1);}
 });
 function doUndo(){
   if(!G.history.length){toast('没有可撤销的步骤');return;}
@@ -1143,6 +1242,10 @@ function onTap(px,py){
   if(blk){const p=topBlocker(blk);if(p&&!p.shake)anim(p,'shake',0.34);SFX.err();toast('这颗被上层板块压住了');}
 }
 cv.addEventListener('pointerdown',e=>{e.preventDefault();
+  // 生成新关要阻塞零点几秒，期间用户多点的那一下会排队，等新关出来才派发 —— 一律丢掉。
+  // timeStamp 是按下的真实时刻（Chromium）；WebKit 可能给的是派发时刻，所以再加 120ms 的派发锁。
+  const ra=G.readyAt||0;
+  if(e.timeStamp<ra||performance.now()-ra<120) return;
   const r=cv.getBoundingClientRect();onTap(e.clientX-r.left,e.clientY-r.top);},{passive:false});
 document.addEventListener('touchmove',e=>{if(e.cancelable)e.preventDefault();},{passive:false});
 document.addEventListener('gesturestart',e=>e.preventDefault());
@@ -1173,7 +1276,7 @@ function frame(ts){
 function boot(){
   load();
   const m=/(?:[?#&])(?:lv|level)=(\d+)/.exec(location.search+location.hash);
-  if(m) G.level=clamp(parseInt(m[1],10)||1,1,9999);
+  if(m) G.level=clamp(parseInt(m[1],10)||1,1,MAX_LEVEL);
   layoutAll();newLevel(G.level);
   G.hintT=G.level<=2?6:0;
   requestAnimationFrame(frame);
